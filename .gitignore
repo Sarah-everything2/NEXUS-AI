@@ -1,0 +1,29 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+logs/*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Security and testing
+test_github_tool.py
+.pytest_cache/
+*.pem
+*.key
+
+# Build artifacts
+build/
+dist/
+
+# Local backups and caches
+*.bak
+
+# Keep user workspace data private
+workspace/*
+!workspace/.gitkeep
