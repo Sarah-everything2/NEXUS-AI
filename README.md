@@ -1,6 +1,6 @@
 ﻿# 🚀 NEXUS AI
 
-
+![NEXUS AI Banner](assets/nexus-banner.png)
 
 ### Your AI. Your Tools. Your Control.
 
