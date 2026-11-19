@@ -15,7 +15,7 @@ async def chat():
     print("=" * 55)
 
     print("\nCOMMANDS")
-    print("  /help       - Show commands")
+    print("  /help       - Show all commands")
     print("  /skills     - List available skills")    
     print("  /tools      - List available tools")
     print("  /agents     - List specialist agents")
