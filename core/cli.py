@@ -45,6 +45,9 @@ async def chat():
                 print("/agents")
                 print("/use <skill> <your request>")
                 print("/history")
+                print("/tools")
+                print("/config")
+                print("/research <url>")
                 print("/exit\n")
                 continue
             
