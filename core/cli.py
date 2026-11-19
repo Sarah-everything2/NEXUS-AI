@@ -2,6 +2,7 @@ import asyncio
 
 from core.agent import NexusAgent
 from memory.store import get_recent_messages
+from core.settings import load_settings
 
 
 async def chat():
@@ -15,7 +16,8 @@ async def chat():
 
     print("\nCOMMANDS")
     print("  /help       - Show commands")
-    print("  /skills     - List available skills")
+    print("  /skills     - List available skills")    
+    print("  /tools      - List available tools")
     print("  /agents     - List specialist agents")
     print("  /use        - Use a specialist agent")
     print("  /history    - View conversation history")
@@ -45,6 +47,56 @@ async def chat():
                 print("/history")
                 print("/exit\n")
                 continue
+            
+            elif command == "/tools":
+                print("\nAVAILABLE TOOLS")
+                print("----------------")
+                for tool in agent.available_tools():
+                    print("-", tool)
+                print()
+                continue   
+         
+            elif command == "/config":
+                settings = load_settings()
+
+                print("\nNEXUS AI CONFIGURATION")
+                print("----------------------")
+                print("Version:", settings["version"])
+                print("AI Provider:", settings["ai_provider"])
+                print("Model:", settings["model"] or "Not configured")
+                print("Memory:", settings["memory_enabled"])
+                print("Autonomous Mode:", settings["autonomous_mode"])
+                print("Approval Required:", settings["require_approval"])
+                print("File Deletion:", settings["allow_file_deletion"])
+                print("Registered Skills:", len(settings["enabled_skills"]))
+                print("Registered Agents:", len(settings["agents"]))
+                print()
+                continue           
+           
+            elif command.startswith("/research"):
+                parts = question.split(maxsplit=1)
+
+                if len(parts) < 2:
+                    print("\nUsage: /research https://example.com\n")
+                    continue
+
+                url = parts[1].strip()
+
+                print("\nNEXUS AI: Requesting permission to research webpage...\n")
+
+                result = await agent.use_tool("web_research", url=url)
+
+                print("\nRESEARCH RESULT")
+                print("----------------")
+
+                if isinstance(result, dict):
+                    print("Title:", result.get("title", "Unknown"))
+                    print("URL:", result.get("url", "Unknown"))
+                    print("\nCONTENT:")
+                    print(result.get("content", "No content"))
+                    print("\nStatus:", result.get("status", "Unknown"))
+                else:
+                    print(result)
 
             elif command == "/skills":
                 print("\nAVAILABLE SKILLS")
