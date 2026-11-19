@@ -27,3 +27,7 @@ dist/
 # Keep user workspace data private
 workspace/*
 !workspace/.gitkeep
+
+exports/
+backups/
+config/settings.json
