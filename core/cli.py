@@ -97,6 +97,7 @@ async def chat():
                     print("\nStatus:", result.get("status", "Unknown"))
                 else:
                     print(result)
+                continue
 
             elif command == "/skills":
                 print("\nAVAILABLE SKILLS")
