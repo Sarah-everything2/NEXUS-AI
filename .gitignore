@@ -31,3 +31,34 @@ workspace/*
 exports/
 backups/
 config/settings.json
+
+# Local MCP configuration and investigation files
+temp-openmausbot/
+config/mcp_servers.json
+
+# XMRig runtime configuration contains wallet information
+config/xmrig.runtime.json
+config/xmrig.state.json
+logs/xmrig.log
+
+# NEXUS private credentials
+.env
+.env.*
+!.env.example
+**/tokens.json
+**/oauth_tokens.json
+**/token.json
+**/secrets.json
+**/*_secret*
+
+# Google OAuth credentials
+**/client_secret*.json
+**/credentials*.json
+
+# Runtime logs
+logs/*.log
+logs/*.jsonl
+
+# Private settings backups
+config/settings.json.backup
+config/settings*.backup

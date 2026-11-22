@@ -6,12 +6,12 @@ from tools.manager import execute_tool, get_available_tools, get_mcp_servers
 from tools.approval import approve_tool_call
 from skills.manager import list_skills, read_skill
 from agents.dispatcher import dispatch_request
-
-
+from core.toolcalling.selector import ToolSelector
 class NexusAgent:
 
     def __init__(self):
-        self.ai = OllamaClient()    
+        self.ai = OllamaClient()
+        self.tool_selector = ToolSelector(self.ai)
     async def run_autonomous_task(self, question):
 
         settings = load_settings()
@@ -22,7 +22,11 @@ class NexusAgent:
         safe_tools = [
             "list_files",
             "read_file",
-            "web_research"
+            "web_research",
+            "xmrig_status",
+            "xmrig_health",
+            "xmrig_logs",
+            "xmrig_recovery_check",
         ]
 
         safe_tools += [
@@ -167,6 +171,87 @@ Never bypass security restrictions.
         # Run autonomous tasks when enabled.
         autonomous_results = await self.run_autonomous_task(question)
 
+        # Use conversational tool selection only when autonomous
+        # execution has not already handled the request.
+        tool_results = []
+
+        if not autonomous_results:
+            actions = await self.tool_selector.select_tools(question)
+
+            for action in actions:
+
+                tool_name = action.get("tool")
+                arguments = action.get("arguments", {})
+
+                # Validate the selected tool again before execution.
+                if tool_name not in get_available_tools():
+                    continue
+
+                if not isinstance(arguments, dict):
+                    continue
+
+                try:
+                    result = await self.use_tool(
+                        tool_name,
+                        **arguments
+                    )
+                except Exception as exc:
+                    result = f"Tool execution failed: {exc}"
+
+                tool_results.append({
+                    "tool": tool_name,
+                    "result": result
+                })
+
+                # Format verified MT5 results.
+        if tool_results and any(
+            item["tool"].startswith("mt5_")
+            for item in tool_results
+        ):
+            formatted_results = []
+
+            for item in tool_results:
+                tool_name = item["tool"]
+                result = item["result"]
+
+                if (
+                    tool_name == "mt5_get_account"
+                    and isinstance(result, dict)
+                    and result.get("status") == "SUCCESS"
+                ):
+                    data = result.get("data", {})
+
+                    balance = data.get("balance", "N/A")
+                    equity = data.get("equity", "N/A")
+
+                    if isinstance(balance, (int, float)):
+                        balance = f"{balance:,.2f}"
+
+                    if isinstance(equity, (int, float)):
+                        equity = f"{equity:,.2f}"
+
+                    formatted_results.append(
+                        "NEXUS AI — MT5 ACCOUNT\n"
+                        "------------------------------\n"
+                        f"Server: {data.get('server', 'N/A')}\n"
+                        f"Balance: {balance} {data.get('currency', '')}\n"
+                        f"Equity: {equity} {data.get('currency', '')}\n"
+                        f"Currency: {data.get('currency', 'N/A')}\n"
+                        "Status: CONNECTED\n"
+                        "Execution: READ ONLY"
+                    )
+                else:
+                    formatted_results.append(
+                        f"{tool_name}:\n"
+                        f"{json.dumps(result, indent=2, default=str) if isinstance(result, (dict, list)) else result}"
+                    )
+
+            answer = "\n\n".join(formatted_results)
+
+            save_message("assistant", answer)
+
+            return answer
+
         history = get_recent_messages(limit=20)
 
         messages = [
@@ -184,6 +269,18 @@ Never bypass security restrictions.
                     f"{autonomous_results}\n"
                     "Explain these actual results to the user. "
                     "Do not claim anything else was executed."
+                )
+            })
+
+        if tool_results:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "CONVERSATIONAL TOOL EXECUTION RESULTS:\n"
+                    f"{json.dumps(tool_results, indent=2)}\n"
+                    "Explain these actual results accurately. "
+                    "Never invent tool results or claim an action "
+                    "succeeded if it failed or was cancelled."
                 )
             })
 
@@ -243,6 +340,10 @@ Respect all NEXUS AI safety rules.
 
     async def use_tool(self, tool_name, **kwargs):
 
+        # MCP tools enforce their own approval inside tools.manager.
+        if tool_name.startswith("mcp_"):
+            return await execute_tool(tool_name, **kwargs)
+
         approved = approve_tool_call(tool_name, kwargs)
 
         if not approved:
@@ -250,3 +351,9 @@ Respect all NEXUS AI safety rules.
 
         return await execute_tool(tool_name, **kwargs)
 
+
+
+
+
+
+from core.settings import load_settings

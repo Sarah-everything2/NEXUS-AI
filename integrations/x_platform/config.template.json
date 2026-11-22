@@ -1,0 +1,15 @@
+﻿{
+  "enabled": false,
+  "testing_mode": true,
+  "publishing_enabled": false,
+  "auth_method": "oauth2_user_context",
+  "require_approval": true,
+  "allow_threads": true,
+  "allow_single_posts": true,
+  "max_posts_per_thread": 10,
+  "credentials_env": {
+    "client_id": "NEXUS_X_CLIENT_ID",
+    "client_secret": "NEXUS_X_CLIENT_SECRET",
+    "access_token": "NEXUS_X_ACCESS_TOKEN"
+  }
+}

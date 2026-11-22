@@ -1,72 +1,24 @@
-\# NEXUS AI Mining Operations Skill
+# NEXUS AI Mining Operations
 
+## XMRig Integration
 
+NEXUS can manage the existing Windows XMRig installation.
 
-\## Purpose
+Available tools:
+- xmrig_status: inspect miner process status.
+- xmrig_health: inspect system memory and miner status.
+- xmrig_logs: inspect recent miner output.
+- xmrig_configure_pool: configure an explicitly supplied pool and wallet.
+- xmrig_start: start mining after approval.
+- xmrig_stop: stop the miner launched by NEXUS.
 
-Monitor and analyse cryptocurrency mining operations.
-
-
-
-\## Planned Capabilities
-
-1\. Monitor mining hardware.
-
-2\. Track hashrate and uptime.
-
-3\. Monitor GPU and CPU temperatures.
-
-4\. Track electricity consumption.
-
-5\. Calculate estimated mining profitability.
-
-6\. Monitor mining pool performance.
-
-7\. Track mining rewards.
-
-8\. Generate mining performance reports.
-
-
-
-\## Workflow
-
-1\. Identify the mining hardware.
-
-2\. Collect available performance information.
-
-3\. Analyse hashrate, temperature and power consumption.
-
-4\. Estimate mining profitability using current data.
-
-5\. Report performance and potential problems.
-
-
-
-\## Safety Rules
-
-1\. Never change mining hardware settings without approval.
-
-2\. Never install mining software without approval.
-
-3\. Never access wallets or transfer cryptocurrency without explicit approval.
-
-4\. Never expose wallet private keys or recovery phrases.
-
-5\. Never claim mining profits are guaranteed.
-
-6\. Clearly distinguish estimated earnings from actual earnings.
-
-
-
-\## Future Integrations
-
-\- GPU monitoring software.
-
-\- Mining pool APIs.
-
-\- Mining profitability APIs.
-
-\- Electricity cost tracking.
-
-
-
+## Safety
+- Never start mining without explicit approval.
+- Never use the XMRig donation endpoint as the user's pool.
+- Never request wallet seed phrases or private keys.
+- Preserve the original XMRig configuration.
+- Use the NEXUS runtime configuration for mining.
+- Never change pool, wallet, or CPU settings without approval.
+- Clearly distinguish estimated rewards from actual pool payouts.
+- Monitor available RAM and CPU usage.
+- Do not promise profitability.

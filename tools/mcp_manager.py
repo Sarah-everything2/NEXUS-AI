@@ -1,6 +1,5 @@
-import json
+﻿import json
 from pathlib import Path
-
 
 CONFIG_FILE = Path(__file__).resolve().parent.parent / "config" / "mcp_servers.json"
 
@@ -28,24 +27,19 @@ class MCPManager:
         return data
 
     def list_servers(self):
-        servers = self.config["mcpServers"]
-
-        if not servers:
-            return {"status": "SUCCESS", "servers": []}
-
         return {
             "status": "SUCCESS",
             "servers": [
                 {
                     "name": name,
                     "type": "HTTP" if "url" in settings else "LOCAL",
-                    "enabled": False
+                    "enabled": settings.get("enabled") is True
                 }
-                for name, settings in servers.items()
+                for name, settings in self.config["mcpServers"].items()
             ]
         }
 
-    def validate_server(self, name):
+    def validate_server(self, name, approved=False):
         servers = self.config["mcpServers"]
 
         if name not in servers:
@@ -56,29 +50,29 @@ class MCPManager:
         if not isinstance(settings, dict):
             return {"status": "ERROR", "message": "Invalid server settings."}
 
+        if settings.get("enabled") is not True:
+            return {"status": "BLOCKED", "message": "Server is disabled."}
+
         if "url" in settings:
             if not settings["url"].startswith("https://"):
-                return {
-                    "status": "BLOCKED",
-                    "message": "Only HTTPS MCP servers are permitted."
-                }
+                return {"status": "BLOCKED", "message": "HTTPS required."}
 
             return {"status": "VALID", "type": "HTTP"}
 
         if "command" in settings:
-            return {
-                "status": "BLOCKED",
-                "message": "Local command execution requires security approval."
-            }
+            if not approved:
+                return {
+                    "status": "BLOCKED",
+                    "message": "Explicit security approval required."
+                }
 
-        return {"status": "ERROR", "message": "Unsupported server configuration."}
+            return {"status": "VALID", "type": "STDIO"}
+
+        return {"status": "ERROR", "message": "Unsupported configuration."}
 
 
 if __name__ == "__main__":
     manager = MCPManager()
-
     print("NEXUS AI MCP MANAGER")
-    print("-------------------")
     print(json.dumps(manager.list_servers(), indent=4))
-    print("\nMCP manager ready.")
-    print("External servers remain disabled.")
+    print("External servers remain disabled by default.")
