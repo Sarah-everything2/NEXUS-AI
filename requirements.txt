@@ -6,3 +6,4 @@ python-dotenv
 apscheduler
 fastmcp>=4.2.1
 ddgs
+colorama>=0.4.6

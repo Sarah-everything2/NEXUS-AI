@@ -6,6 +6,8 @@ import platform
 import sqlite3
 import shutil
 from datetime import datetime
+from colorama import just_fix_windows_console
+just_fix_windows_console()
 from core.agent import NexusAgent
 from memory.store import get_recent_messages, DB_PATH
 from core.settings import load_settings, save_settings
@@ -61,19 +63,19 @@ class UI:
 
     @staticmethod
     def line():
-        print(UI.CYAN + "━" * 65 + UI.RESET)
+        print(UI.CYAN + "-" * 65 + UI.RESET)
 
     @staticmethod
     def success(message):
-        print(f"{UI.GREEN}✔ {message}{UI.RESET}")
+        print(f"{UI.GREEN}[+] {message}{UI.RESET}")
 
     @staticmethod
     def error(message):
-        print(f"{UI.RED}✖ {message}{UI.RESET}")
+        print(f"{UI.RED}[!] {message}{UI.RESET}")
 
     @staticmethod
     def info(message):
-        print(f"{UI.CYAN}◆ {message}{UI.RESET}")
+        print(f"{UI.CYAN}[*] {message}{UI.RESET}")
 
     @staticmethod
     def banner():
@@ -81,12 +83,7 @@ class UI:
         UI.clear()
 
         print(UI.CYAN + UI.BOLD)
-        print("███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗")
-        print("████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝")
-        print("██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗")
-        print("██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║")
-        print("██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║")
-        print("╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝")
+        print("             NEXUS AI COMMAND CENTRE")
         print(UI.RESET)
 
         print(UI.PURPLE + UI.BOLD)
@@ -352,7 +349,7 @@ class UI:
 
         for command, description in commands:
             print(
-                f"  {UI.GREEN}{command:<27}{UI.RESET}"
+                f"  {UI.GREEN}{command:<38}{UI.RESET}"
                 f"{UI.GRAY}{description}{UI.RESET}"
             )
 
@@ -367,7 +364,7 @@ async def chat():
     UI.banner()
     UI.status()
 
-    print(f"{UI.GREEN}● NEXUS AI CONTROL CENTRE ONLINE{UI.RESET}")
+    print(f"{UI.GREEN}- NEXUS AI CONTROL CENTRE ONLINE{UI.RESET}")
     print(f"{UI.GRAY}Type /help to explore your assistant.{UI.RESET}\n")
 
     while True:
@@ -375,7 +372,7 @@ async def chat():
         try:
             prompt = (
                 f"{UI.BOLD}{UI.GREEN}YOU {UI.RESET}"
-                f"{UI.CYAN}â¯ {UI.RESET}"
+                f"{UI.CYAN}> {UI.RESET}"
             )
 
             question = (await asyncio.to_thread(input, prompt)).strip()
@@ -649,7 +646,7 @@ async def chat():
                 print(f"\n{UI.CYAN}{UI.BOLD}REGISTERED TOOLS{UI.RESET}")
 
                 for tool in agent.available_tools():
-                    print(f"  {UI.GREEN}●{UI.RESET} {tool}")
+                    print(f"  {UI.GREEN}-{UI.RESET} {tool}")
 
                 print()
                 continue
@@ -659,7 +656,7 @@ async def chat():
                 print(f"\n{UI.CYAN}{UI.BOLD}AVAILABLE SKILLS{UI.RESET}")
 
                 for skill in agent.available_skills():
-                    print(f"  {UI.GREEN}●{UI.RESET} {skill}")
+                    print(f"  {UI.GREEN}-{UI.RESET} {skill}")
 
                 print()
                 continue
