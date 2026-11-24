@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 import math
 import re
+from skills.signal_commander.discovery_memory import get_discovery_memory
 
 
 NICHE_KEYWORDS = {
@@ -163,6 +164,7 @@ def score_opportunity(item, niche="", repeat_count=1):
 
 def rank_opportunities(items, niche="", repeat_counts=None):
     repeat_counts = repeat_counts or {}
+    memory_counts = {str(r.get('name', '')).strip().lower(): r.get('discovery_count', 1) for r in get_discovery_memory().get('trends', []) if isinstance(r, dict)}
     scored = []
 
     for item in items:
@@ -173,7 +175,8 @@ def rank_opportunities(items, niche="", repeat_counts=None):
             or ""
         ).strip().lower()
 
-        count = max(1, int(repeat_counts.get(identity, 1)))
+        memory_count = memory_counts.get((item.get('title') or '').strip().lower(), 1)
+        count = max(1, int(repeat_counts.get(identity, 1)), int(memory_count))
 
         scored.append(
             score_opportunity(item, niche, repeat_count=count)

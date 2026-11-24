@@ -162,14 +162,6 @@ async def run_discovery(root_niche="Artificial Intelligence"):
         if report.get("status") == "SUCCESS"
     )
 
-    for story in ranked:
-        remember_trend(
-            story.get("title", ""),
-            niche=story.get("niche"),
-            evidence=story.get("title", ""),
-            source=story.get("url", ""),
-        )
-
     try:
         cross_category = await run_cross_category_discovery(
             max_pairs=8,
