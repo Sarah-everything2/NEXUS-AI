@@ -7,6 +7,7 @@ from skills.signal_commander.discovery_memory import remember_niche, remember_tr
 from skills.signal_commander.opportunity_ranker import rank_opportunities
 from tools.trend_discovery import discover_trends
 from skills.signal_commander.cross_category_intelligence import run_cross_category_discovery
+from skills.signal_commander.story_verifier import verify_story
 
 MAX_NICHES = 20
 MAX_DEPTH = 2
@@ -242,6 +243,36 @@ async def run_discovery(root_niche="Artificial Intelligence"):
             cross_ranked.append(scored)
 
     ranked.extend(cross_ranked)
+    verify_candidates = ranked[:10]
+    semaphore = asyncio.Semaphore(2)
+
+    async def _verify_opportunity(item):
+        async with semaphore:
+            try:
+                result = await verify_story(item)
+            except Exception as exc:
+                result = {
+                    "verification_status": "UNVERIFIED",
+                    "verification_score": 0,
+                    "independent_sources": 0,
+                    "source_domains": [],
+                    "verification_notes": [str(exc)[:160]],
+                }
+        item.update({
+            key: value for key, value in result.items()
+            if key.startswith("verification_") or key in (
+                "independent_sources", "source_domains", "matching_evidence"
+            )
+        })
+        bonus = (
+            5 if result.get("verification_status") == "CORROBORATED"
+            else 2 if result.get("verification_status") == "PARTIALLY_CORROBORATED"
+            else 0
+        )
+        item["verification_bonus"] = bonus
+        item["score"] = min(100, round(item.get("score", 0) + bonus, 2))
+
+    await asyncio.gather(*(_verify_opportunity(item) for item in verify_candidates))
     ranked.sort(key=lambda item: item.get("score", 0), reverse=True)
 
     return {
