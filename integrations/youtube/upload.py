@@ -1,4 +1,4 @@
-"""Safety-controlled YouTube upload engine."""
+﻿"""Safety-controlled YouTube upload engine."""
 import json
 from pathlib import Path
 from integrations.youtube.oauth import get_youtube_service
@@ -20,7 +20,11 @@ def upload_video(
     category_id="22",
     privacy_status=None,
     approved=False,
+    made_for_kids=None,
 ):
+    if not isinstance(made_for_kids, bool):
+        raise ValueError("Explicit made_for_kids True/False declaration required.")
+
     config = load_config()
 
     if not config.get("enabled") or not config.get("publishing_enabled"):
@@ -65,7 +69,7 @@ def upload_video(
         },
         "status": {
             "privacyStatus": privacy_status,
-            "selfDeclaredMadeForKids": False,
+            "selfDeclaredMadeForKids": made_for_kids,
         },
     }
 
@@ -85,3 +89,30 @@ def upload_video(
         "video_id": result.get("id"),
         "privacy_status": privacy_status,
     }
+
+
+
+def upload_video_autonomous(**kwargs):
+    """Restricted autonomous uploads: private videos only."""
+    from core.settings import load_settings
+
+    settings = load_settings()
+    config = load_config()
+
+    if not settings.get("autonomous_mode", False):
+        raise PermissionError("NEXUS autonomous mode is disabled.")
+
+    if not config.get("allow_autonomous_private_uploads", False):
+        raise PermissionError("Autonomous private uploads are not authorized in config.")
+
+    if "made_for_kids" not in kwargs or not isinstance(kwargs["made_for_kids"], bool):
+        raise ValueError("Explicit made_for_kids declaration required.")
+
+    kwargs.pop("approved", None)
+    kwargs.pop("privacy_status", None)
+
+    return upload_video(
+        **kwargs,
+        privacy_status="private",
+        approved=True,
+    )

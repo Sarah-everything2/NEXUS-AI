@@ -62,3 +62,18 @@ logs/*.jsonl
 # Private settings backups
 config/settings.json.backup
 config/settings*.backup
+
+# Local development backups - never publish
+*.backup
+*.process-backup
+*.ram-backup
+*.xmrig-backup
+*.recovery-backup
+*.before_*
+
+# Private runtime data and credentials
+data/
+models/
+secrets/
+skills/signal_commander/reports/
+

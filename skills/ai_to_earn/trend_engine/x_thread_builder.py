@@ -1,6 +1,6 @@
-﻿"""NEXUS original X thread builder. TESTING ONLY."""
-TESTING_MODE = True
-PUBLISHING_ENABLED = False
+﻿"""NEXUS original X thread builder. Production mode."""
+TESTING_MODE = False
+PUBLISHING_ENABLED = True
 
 def build_thread(story):
     title = story.get("title", "AI topic")
@@ -18,8 +18,8 @@ def build_thread(story):
     ]
     return {
         "status": "DRAFT",
-        "testing_mode": True,
-        "publishing_enabled": False,
+        "testing_mode": False,
+        "publishing_enabled": True,
         "platform": "X",
         "topic": title,
         "posts": posts,

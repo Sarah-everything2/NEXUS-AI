@@ -1,9 +1,9 @@
-﻿"""NEXUS AI-to-Earn YouTube discovery pipeline. TESTING ONLY."""
+﻿"""NEXUS AI-to-Earn YouTube discovery pipeline. Production mode."""
 from datetime import datetime, timezone
 from .youtube import search_youtube
 from .core import rank_trends
 
-TESTING_MODE = True
+TESTING_MODE = False
 
 def discover_youtube_trends(query, limit=5):
     videos = search_youtube(query, limit)

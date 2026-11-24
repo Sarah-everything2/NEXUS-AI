@@ -1,4 +1,4 @@
-"""NEXUS AI morning briefing and daily task planner."""
+﻿"""NEXUS AI morning briefing and daily task planner."""
 from datetime import datetime
 
 TASKS = {
@@ -18,7 +18,7 @@ def morning_briefing():
         "tasks": TASKS,
         "rules": {
             "mining": "Requires hardware safety checks and your approval.",
-            "trading": "DEMO ACCOUNT ONLY. Trade execution requires your approval.",
+            "trading": "HEADWAY DEMO ONLY. One daily plan approval starts automatic demo execution. No per-trade approval. Live accounts are blocked.",
             "youtube": "Publishing requires your approval.",
             "system": "Stop heavy tasks if system resources become unsafe.",
         },
@@ -60,3 +60,4 @@ def format_briefing():
 
 if __name__ == "__main__":
     print(format_briefing())
+

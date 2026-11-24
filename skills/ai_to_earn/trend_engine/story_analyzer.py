@@ -1,7 +1,7 @@
-﻿"""NEXUS AI-to-Earn Story Intelligence. TESTING ONLY."""
+﻿"""NEXUS AI-to-Earn Story Intelligence. Production mode."""
 from .youtube import fetch_transcript
 
-TESTING_MODE = True
+TESTING_MODE = False
 
 def analyze_story(video):
     transcript_data = fetch_transcript(video["url"])
@@ -46,5 +46,5 @@ def analyze_story(video):
         "transcript_excerpt": text[:3000],
         "content_opportunities": opportunities,
         "requires_original_content": True,
-        "publishing_enabled": False
+        "publishing_enabled": True
     }

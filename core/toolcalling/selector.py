@@ -1,3 +1,4 @@
+﻿import json
 import json
 from tools.manager import get_available_tools
 

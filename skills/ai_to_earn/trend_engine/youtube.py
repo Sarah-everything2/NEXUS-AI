@@ -1,4 +1,4 @@
-"""NEXUS YouTube discovery and transcript adapter. TESTING ONLY."""
+﻿"""NEXUS YouTube discovery and transcript adapter. Production mode."""
 import json
 import re
 import subprocess
@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-TESTING_MODE = True
+TESTING_MODE = False
 
 def _run(args, timeout=45):
     return subprocess.run(

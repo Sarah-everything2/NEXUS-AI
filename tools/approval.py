@@ -6,6 +6,22 @@ AUTONOMOUS_SAFE_TOOLS = {
     "list_files",
     "read_file",
     "web_research",
+    "trend_discovery",
+    "video_probe",
+    "video_transcribe",
+    "video_detect_highlights",
+    "video_extract_clip",
+    "video_create_vertical_short",
+    "video_create_subtitles",
+    "video_burn_subtitles",
+    "youtube_status",
+    "youtube_channel",
+    "youtube_controls",
+    "x_status",
+    "x_account",
+    "x_analytics",
+    "x_search_trends",
+    "x_account_timeline",
 }
 
 

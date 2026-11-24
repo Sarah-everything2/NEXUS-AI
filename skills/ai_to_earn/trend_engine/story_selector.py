@@ -1,4 +1,4 @@
-"""NEXUS AI-to-Earn Winning Story Selector. TESTING ONLY."""
+﻿"""NEXUS AI-to-Earn Winning Story Selector. Production mode."""
 import json
 import subprocess
 import sys
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from .youtube import search_youtube
 from .core import rank_trends
 
-TESTING_MODE = True
+TESTING_MODE = False
 
 NICHES = {
     "AI Agents for Business": "AI agents business automation",

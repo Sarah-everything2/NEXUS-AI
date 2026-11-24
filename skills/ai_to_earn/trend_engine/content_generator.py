@@ -1,6 +1,6 @@
-﻿"""NEXUS AI-to-Earn Original Content Generator. TESTING ONLY."""
-TESTING_MODE = True
-PUBLISHING_ENABLED = False
+﻿"""NEXUS AI-to-Earn Original Content Generator. Production mode."""
+TESTING_MODE = False
+PUBLISHING_ENABLED = True
 
 def generate_content(story, content_type="youtube"):
     title = story.get("title", "Trending topic")
@@ -31,8 +31,8 @@ def generate_content(story, content_type="youtube"):
     template = formats.get(content_type, formats["youtube"])
     return {
         "status": "DRAFT",
-        "testing_mode": True,
-        "publishing_enabled": False,
+        "testing_mode": False,
+        "publishing_enabled": True,
         "content_type": content_type,
         "topic": title,
         "hook": template["hook"],

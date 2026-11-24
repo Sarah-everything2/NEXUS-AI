@@ -1,4 +1,4 @@
-import json
+﻿import json
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "settings.json"
@@ -58,7 +58,7 @@ def load_settings():
         save_settings(DEFAULT_SETTINGS)
         return DEFAULT_SETTINGS.copy()
 
-    with open(CONFIG_PATH, "r", encoding="utf-8") as file:
+    with open(CONFIG_PATH, "r", encoding="utf-8-sig") as file:
         settings = json.load(file)
 
     merged = {**DEFAULT_SETTINGS, **settings}
@@ -74,7 +74,7 @@ def load_settings():
 def save_settings(settings):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(CONFIG_PATH, "w", encoding="utf-8") as file:
+    with open(CONFIG_PATH, "w", encoding="utf-8-sig") as file:
         json.dump(settings, file, indent=4)
 
 

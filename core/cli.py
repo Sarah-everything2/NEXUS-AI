@@ -10,6 +10,7 @@ from core.agent import NexusAgent
 from memory.store import get_recent_messages, DB_PATH
 from core.settings import load_settings, save_settings
 from core.scheduler import start_scheduler, stop_scheduler, add_reminder, list_reminders, cancel_reminder
+from integrations.mt5 import session_controller as mt5_session
 
 
 # NEXUS AI TERMINAL THEME
@@ -323,6 +324,11 @@ class UI:
             ("/tools", "View registered tools"),
             ("/use <skill> <request>", "Use a specialist agent"),
             ("/research <url>", "Research a webpage"),
+            ("/x-growth", "Research opportunities and generate X drafts"),
+            ("/x-drafts", "List saved X drafts"),
+            ("/x-preview <id>", "Preview an X draft"),
+            ("/x-publish <id>", "Request approval to publish an X draft"),
+            ("/x-analytics", "View X publication analytics"),
             ("/schedule add 10m <message>", "Create a reminder"),
             ("/schedule list", "View scheduled reminders"),
             ("/schedule cancel <id>", "Cancel a reminder"),
@@ -330,6 +336,10 @@ class UI:
             ("/settings", "Open configuration and safety manager"),
             ("/autonomous", "View autonomous mode status"),
             ("/autonomous on/off", "Enable or disable autonomous mode"),
+            ("/trading-plan", "View today's demo trading plan"),
+            ("/trading-go", "Approve and start today's demo session"),
+            ("/trading-stop", "Request graceful demo session stop"),
+            ("/trading-status", "Check demo session processes"),
             ("/config", "View system configuration"),
             ("/status", "View live system status"),
             ("/diagnostics", "Run system health checks"),
@@ -471,8 +481,35 @@ async def chat():
                     UI.error("Invalid schedule command. Type /schedule help.")
                     continue
 
+            if command == "/trading-plan":
+                mt5_session.show_plan()
+                continue
+
+            elif command == "/trading-go":
+                mt5_session.show_plan()
+                approval = await asyncio.to_thread(
+                    input, "Type GO to approve today's Headway-Demo session: "
+                )
+                if approval.strip() == "GO":
+                    try:
+                        mt5_session.start_session(daily_approval=True)
+                    except Exception as error:
+                        UI.error(f"Trading session not started: {error}")
+                else:
+                    print("Daily trading approval cancelled.")
+                continue
+
+            elif command == "/trading-stop":
+                mt5_session.stop_session()
+                continue
+
+            elif command == "/trading-status":
+                mt5_session.status()
+                continue
+
             if command == "/exit":
 
+                mt5_session.stop_session()
                 stop_scheduler()
 
                 print(f"\n{UI.CYAN}NEXUS AI: Shutting down safely.{UI.RESET}")
@@ -525,6 +562,86 @@ async def chat():
             elif command in ("/config", "/status"):
 
                 UI.status()
+                continue
+
+            elif command == "/x-growth":
+
+                print(f"\n{UI.YELLOW}Researching opportunities and generating X drafts...{UI.RESET}")
+
+                result = await agent.use_tool(
+                    "x_growth_run",
+                    content_type="post",
+                    max_drafts=1,
+                    queries_per_category=1,
+                )
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X GROWTH RESULTS{UI.RESET}")
+                print(result)
+                print()
+                continue
+
+            elif command == "/x-drafts":
+
+                result = await agent.use_tool("x_growth_list_drafts")
+
+                print(f"\n{UI.CYAN}{UI.BOLD}SAVED X DRAFTS{UI.RESET}")
+
+                for draft in result:
+                    print(f"\nID: {draft.get('draft_id')}")
+                    print(f"Type: {draft.get('content_type')}")
+                    print(f"Status: {draft.get('status')}")
+                    print(f"Content: {draft.get('content')}")
+
+                if not result:
+                    print("No saved drafts.")
+
+                print()
+                continue
+
+            elif command.startswith("/x-preview"):
+
+                parts = question.split(maxsplit=1)
+
+                if len(parts) != 2:
+                    UI.error("Usage: /x-preview <draft_id>")
+                    continue
+
+                result = await agent.use_tool(
+                    "x_growth_preview_draft",
+                    draft_id=parts[1].strip(),
+                )
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X DRAFT PREVIEW{UI.RESET}")
+                print(result)
+                print()
+                continue
+
+            elif command.startswith("/x-publish"):
+
+                parts = question.split(maxsplit=1)
+
+                if len(parts) != 2:
+                    UI.error("Usage: /x-publish <draft_id>")
+                    continue
+
+                print(f"\n{UI.YELLOW}Publication requires explicit human approval.{UI.RESET}")
+
+                result = await agent.use_tool(
+                    "x_growth_publish_draft",
+                    draft_id=parts[1].strip(),
+                )
+
+                print(result)
+                print()
+                continue
+
+            elif command == "/x-analytics":
+
+                result = await agent.use_tool("x_growth_analytics")
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X GROWTH ANALYTICS{UI.RESET}")
+                print(result)
+                print()
                 continue
 
             elif command == "/tools":
@@ -653,6 +770,8 @@ async def chat():
         except KeyboardInterrupt:
 
             print(f"\n\n{UI.YELLOW}Session interrupted.{UI.RESET}")
+            mt5_session.stop_session()
+            stop_scheduler()
             break
 
         except Exception as error:

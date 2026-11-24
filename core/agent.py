@@ -7,6 +7,7 @@ from tools.approval import approve_tool_call
 from skills.manager import list_skills, read_skill
 from agents.dispatcher import dispatch_request
 from core.toolcalling.selector import ToolSelector
+from integrations.youtube.upload import load_config
 class NexusAgent:
 
     def __init__(self):
@@ -23,11 +24,31 @@ class NexusAgent:
             "list_files",
             "read_file",
             "web_research",
+            "trend_discovery",
             "xmrig_status",
             "xmrig_health",
             "xmrig_logs",
             "xmrig_recovery_check",
+            "video_probe",
+            "video_transcribe",
+            "video_detect_highlights",
+            "video_extract_clip",
+            "video_create_vertical_short",
+            "video_create_subtitles",
+            "video_burn_subtitles",
+            "youtube_status",
+            "youtube_channel",
+            "youtube_controls",
+    "x_status",
+    "x_account",
+    "x_analytics",
+    "x_search_trends",
+    "x_account_timeline",
         ]
+
+        youtube_config = load_config()
+        if youtube_config.get("allow_autonomous_private_uploads", False):
+            safe_tools.append("youtube_upload_autonomous")
 
         safe_tools += [
             tool for tool in get_available_tools()
@@ -103,6 +124,7 @@ Return ONLY valid JSON in this format:
 
             result = await self.use_tool(
                 tool_name,
+                _autonomous=True,
                 **arguments
             )
 
@@ -231,7 +253,7 @@ Never bypass security restrictions.
                         equity = f"{equity:,.2f}"
 
                     formatted_results.append(
-                        "NEXUS AI — MT5 ACCOUNT\n"
+                        "NEXUS AI â€” MT5 ACCOUNT\n"
                         "------------------------------\n"
                         f"Server: {data.get('server', 'N/A')}\n"
                         f"Balance: {balance} {data.get('currency', '')}\n"
@@ -338,11 +360,27 @@ Respect all NEXUS AI safety rules.
     def load_skill(self, skill_name):
         return read_skill(skill_name)
 
-    async def use_tool(self, tool_name, **kwargs):
+    async def use_tool(self, tool_name, _autonomous=False, **kwargs):
 
         # MCP tools enforce their own approval inside tools.manager.
         if tool_name.startswith("mcp_"):
             return await execute_tool(tool_name, **kwargs)
+
+        if tool_name == "youtube_upload_autonomous":
+            if not _autonomous:
+                return "Autonomous upload tool is restricted to the autonomous task runner."
+            return await execute_tool(tool_name, **kwargs)
+
+        if tool_name == "youtube_upload":
+            return await execute_tool(tool_name, **kwargs)
+
+        # X publishing tools enforce approval internally.
+        # X Growth publication delegates to those same protected wrappers.
+
+        if tool_name in ("x_post", "x_thread", "x_growth_publish_draft"):
+
+            return await execute_tool(tool_name, **kwargs)
+
 
         approved = approve_tool_call(tool_name, kwargs)
 
@@ -357,3 +395,4 @@ Respect all NEXUS AI safety rules.
 
 
 from core.settings import load_settings
+
