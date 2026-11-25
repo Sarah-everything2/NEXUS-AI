@@ -254,3 +254,63 @@ TOOLS.update({
 # NEXUS X Growth Agent
 import skills.x_growth.tool_registration
 
+
+
+# Signal Commander — unified research and opportunity discovery
+from skills.signal_commander.discovery_orchestrator import run_discovery
+
+
+async def signal_commander_discover(root_niche="Artificial Intelligence"):
+    if not isinstance(root_niche, str) or not root_niche.strip():
+        raise ValueError("A valid root niche is required.")
+    if len(root_niche) > 120:
+        raise ValueError("Root niche must not exceed 120 characters.")
+    return await run_discovery(root_niche=root_niche.strip())
+
+
+TOOLS["signal_commander_discover"] = signal_commander_discover
+
+# NEXUS persistent intelligence task management
+from agents.task_store import get_tasks, update_task
+
+def nexus_list_agent_tasks(status=None, limit=100):
+    return get_tasks(status=status, limit=limit)
+
+def nexus_update_agent_task(task_id, status):
+    return update_task(task_id, status)
+
+def nexus_agent_workload():
+    records = get_tasks(limit=1000)["tasks"]
+    workload = {}
+    for task in records:
+        agent_id = task.get("agent_id", "unknown")
+        entry = workload.setdefault(agent_id, {
+            "agent_id": agent_id,
+            "agent_name": task.get("agent_name", "Unknown"),
+            "total": 0,
+            "statuses": {}
+        })
+        entry["total"] += 1
+        current = task.get("status", "UNKNOWN")
+        entry["statuses"][current] = entry["statuses"].get(current, 0) + 1
+    return {"status": "SUCCESS", "total_tasks": len(records),
+            "agent_workloads": list(workload.values())}
+
+TOOLS["nexus_list_agent_tasks"] = nexus_list_agent_tasks
+TOOLS["nexus_update_agent_task"] = nexus_update_agent_task
+TOOLS["nexus_agent_workload"] = nexus_agent_workload
+
+# SIGNAL_COMMANDER_INTELLIGENCE_TOOLS
+from skills.signal_commander.intelligence_dashboard import (
+    get_intelligence_dashboard,
+    get_discovery_memory_insights,
+    get_signal_commander_insights,
+    search_discovery_reports,
+    audit_central_tool_registry,
+)
+
+TOOLS["signal_commander_dashboard"] = get_intelligence_dashboard
+TOOLS["signal_commander_memory"] = get_discovery_memory_insights
+TOOLS["signal_commander_insights"] = get_signal_commander_insights
+TOOLS["signal_commander_report_search"] = search_discovery_reports
+TOOLS["signal_commander_registry_audit"] = audit_central_tool_registry

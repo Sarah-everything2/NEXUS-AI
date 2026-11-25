@@ -25,6 +25,7 @@ class NexusAgent:
             "read_file",
             "web_research",
             "trend_discovery",
+            "signal_commander_discover", "signal_commander_dashboard", "signal_commander_memory", "signal_commander_insights", "signal_commander_report_search", "signal_commander_registry_audit",
             "xmrig_status",
             "xmrig_health",
             "xmrig_logs",
@@ -74,6 +75,7 @@ Rules:
 - Use no more than 3 actions.
 - Only use tools from the available safe tools list.
 - Never select write_file or delete_file.
+- Signal Commander is research-only: it discovers and ranks opportunities, verifies available evidence and saves reports. It must never publish, trade, mine or execute external actions.
 - Never perform financial transactions.
 - Never invent tool names.
 - If no tool is needed, return an empty actions list.
