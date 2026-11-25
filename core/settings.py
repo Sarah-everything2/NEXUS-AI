@@ -13,7 +13,7 @@ DEFAULT_SETTINGS = {
 
     "memory_enabled": True,
 
-    "autonomous_mode": False,
+    "autonomous_mode": True,
     "require_approval": True,
     "allow_file_deletion": False,
     "workspace_only": True,
