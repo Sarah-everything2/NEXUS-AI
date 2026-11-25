@@ -680,6 +680,61 @@ async def chat():
                 UI.diagnostics(agent)
                 continue
 
+            # SIGNAL COMMANDER PATCH
+            elif command == "/signal":
+                UI.console.print(Panel(
+                    "Signal Commander commands\\n"
+                    "/signal-dashboard  Dashboard\\n"
+                    "/signal-insights   Insights\\n"
+                    "/signal-memory     Memory\\n"
+                    "/signal-search <query>  Search reports\\n"
+                    "/signal-audit      Registry audit",
+                    title="[bold bright_cyan]SIGNAL COMMANDER[/]",
+                    border_style="bright_cyan"
+                ))
+                continue
+
+            elif command.startswith((
+                "/signal-dashboard", "/signal-insights",
+                "/signal-memory", "/signal-search", "/signal-audit"
+            )):
+                parts = question.split(maxsplit=1)
+                cmd = parts[0].lower()
+                names = {
+                    "/signal-dashboard": "signal_commander_dashboard",
+                    "/signal-insights": "signal_commander_insights",
+                    "/signal-memory": "signal_commander_memory",
+                    "/signal-search": "signal_commander_report_search",
+                    "/signal-audit": "signal_commander_registry_audit",
+                }
+                tool = names[cmd]
+
+                if cmd == "/signal-search" and len(parts) != 2:
+                    UI.error("Usage: /signal-search <query>")
+                    continue
+
+                if tool not in set(agent.available_tools()):
+                    UI.error("Signal Commander tool is not registered: " + tool)
+                    continue
+
+                try:
+                    if cmd == "/signal-search":
+                        result = await agent.use_tool(
+                            tool, query=parts[1].strip()
+                        )
+                    else:
+                        result = await agent.use_tool(tool)
+
+                    UI.console.print(Panel(
+                        str(result),
+                        title="[bold bright_cyan]SIGNAL COMMANDER / "
+                              + cmd[1:].upper() + "[/]",
+                        border_style="bright_cyan"
+                    ))
+                except Exception as error:
+                    UI.error("Signal Commander request failed: " + str(error))
+                continue
+
             elif command == "/help":
 
                 UI.help()

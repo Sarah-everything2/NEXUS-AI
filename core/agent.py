@@ -4,6 +4,7 @@ from brain.ollama_client import OllamaClient
 from memory.store import save_message, get_recent_messages
 from tools.manager import execute_tool, get_available_tools, get_mcp_servers
 from tools.approval import approve_tool_call
+from tools.github_tools import READ_ONLY_TOOLS
 from skills.manager import list_skills, read_skill
 from agents.dispatcher import dispatch_request
 from core.toolcalling.selector import ToolSelector
@@ -56,9 +57,11 @@ class NexusAgent:
         if youtube_config.get("allow_autonomous_private_uploads", False):
             safe_tools.append("youtube_upload_autonomous")
 
+        available_tools = set(get_available_tools())
         safe_tools += [
-            tool for tool in get_available_tools()
-            if tool.startswith("github_")
+            f"github_{tool}"
+            for tool in sorted(READ_ONLY_TOOLS)
+            if f"github_{tool}" in available_tools
         ]
 
         prompt = f"""
@@ -385,7 +388,10 @@ Respect all NEXUS AI safety rules.
 
     async def use_tool(self, tool_name, _autonomous=False, **kwargs):
 
-        # MCP tools enforce their own approval inside tools.manager.
+        # GitHub and MCP executors enforce approval inside tools.manager.
+        if tool_name.startswith("github_"):
+            return await execute_tool(tool_name, **kwargs)
+
         if tool_name.startswith("mcp_"):
             return await execute_tool(tool_name, **kwargs)
 

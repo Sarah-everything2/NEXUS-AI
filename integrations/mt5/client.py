@@ -1,8 +1,7 @@
-﻿import csv
+import csv
 import re
 from pathlib import Path
 
-import httpx
 
 
 # Fixed local Hermes bridge. No external or user-supplied URLs.
@@ -20,6 +19,7 @@ TIMEOUT = 10.0
 
 async def _get(endpoint: str) -> dict:
     """Make a read-only request to the local Hermes bridge."""
+    import httpx
     try:
         async with httpx.AsyncClient(
             base_url=BASE_URL,
@@ -84,35 +84,43 @@ async def get_history() -> dict:
 
 
 def get_strategy_signal() -> dict:
-    """Read the latest existing Hermes strategy signal."""
-    if not SIGNAL_LOG.is_file():
-        return {
-            "status": "ERROR",
-            "message": "Hermes strategy signal log not found.",
-        }
+    """Read the latest signal directly from the existing Hermes strategy engine."""
+    import importlib.util
+
+    engine_path = Path(
+        r"C:\AI-Trading\mt5-bridge\strategy\mt5_signal_engine.py"
+    )
 
     try:
-        with SIGNAL_LOG.open(
-            "r",
-            newline="",
-            encoding="utf-8-sig",
-        ) as file:
-            rows = list(csv.DictReader(file))
-
-        if not rows:
+        spec = importlib.util.spec_from_file_location(
+            "nexus_mt5_signal_engine", engine_path
+        )
+        if spec is None or spec.loader is None:
             return {
-                "status": "EMPTY",
-                "message": "Hermes strategy signal log is empty.",
+                "status": "ERROR",
+                "message": "Could not load the MT5 strategy engine.",
+            }
+
+        engine = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(engine)
+
+        signal = engine.get_latest_signal()
+
+        if not isinstance(signal, dict) or not signal.get("ok"):
+            return {
+                "status": "ERROR",
+                "message": "Strategy engine did not return a valid signal.",
+                "details": signal,
             }
 
         return {
             "status": "SUCCESS",
             "mode": "READ ONLY",
-            "latest_signal": rows[-1],
+            "latest_signal": signal,
         }
 
-    except (OSError, csv.Error):
+    except Exception as exc:
         return {
             "status": "ERROR",
-            "message": "Could not read Hermes strategy signal log.",
+            "message": f"Could not read MT5 strategy signal: {exc}",
         }

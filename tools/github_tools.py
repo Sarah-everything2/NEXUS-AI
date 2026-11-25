@@ -5,7 +5,7 @@ from fastmcp import Client
 
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "mcp_servers.json"
 
-ALLOWED_TOOLS = {
+READ_ONLY_TOOLS = {
     "get_commit", "get_file_contents", "get_label",
     "get_latest_release", "get_me", "get_release_by_tag",
     "get_tag", "get_team_members", "get_teams",
@@ -17,6 +17,9 @@ ALLOWED_TOOLS = {
     "search_issues", "search_pull_requests",
     "search_repositories", "search_users", "ui_get"
 }
+
+# Only explicitly listed read-only operations are exposed.
+ALLOWED_TOOLS = READ_ONLY_TOOLS
 
 async def github_call(tool_name, arguments):
     if tool_name not in ALLOWED_TOOLS:

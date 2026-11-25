@@ -1,0 +1,18 @@
+﻿{
+  "demo_only": true,
+  "execution_enabled": true,
+  "require_confirmation": true,
+  "maximum_volume": 0.01,
+  "maximum_open_positions": 1,
+  "require_stop_loss": true,
+  "require_take_profit": true,
+  "maximum_quote_age_seconds": 300,
+  "demo_execution_enabled": true,
+  "live_execution_enabled": false,
+  "maximum_risk_percent": 1,
+  "atr_timeframe": "M5",
+  "atr_period": 14,
+  "atr_stop_multiplier": 1.5,
+  "atr_target_multiplier": 3.0,
+  "automatic_demo_trading_enabled": true
+}

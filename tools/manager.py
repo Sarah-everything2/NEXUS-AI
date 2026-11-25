@@ -40,6 +40,12 @@ TOOLS.update({
 
 def make_github_executor(mcp_tool_name):
     async def execute(**kwargs):
+        registered_name = f"github_{mcp_tool_name}"
+        approved = approve_tool_call(registered_name, kwargs)
+
+        if not approved:
+            return "GitHub action cancelled. Permission denied."
+
         return await github_call(mcp_tool_name, kwargs)
     return execute
 

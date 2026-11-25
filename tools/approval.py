@@ -1,4 +1,5 @@
 from core.settings import load_settings
+from tools.github_tools import READ_ONLY_TOOLS
 
 
 # Tools permitted to run autonomously.
@@ -51,7 +52,10 @@ def approve_tool_call(tool_name, arguments):
 
         if (
             tool_name in AUTONOMOUS_SAFE_TOOLS
-            or tool_name.startswith("github_")
+            or (
+                tool_name.startswith("github_")
+                and tool_name.removeprefix("github_") in READ_ONLY_TOOLS
+            )
         ):
             print("AUTONOMOUS MODE: Safe operation approved.")
             return True

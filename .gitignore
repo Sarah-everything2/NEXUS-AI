@@ -84,3 +84,6 @@ venv/
 *.py.before_*
 *.py.autostart-backup
 temp/
+
+# Local upgrade backups
+.nexus_upgrade_backup/

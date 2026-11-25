@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 from core.settings import load_settings
@@ -9,6 +9,32 @@ from skills.manager import list_skills
 from tools.manager import get_available_tools
 
 app = FastAPI(title="NEXUS AI Control Centre")
+
+# NEXUS PWA PATCH: explicit dashboard-shell assets only.
+from pathlib import Path
+_PWA_STATIC = Path(__file__).resolve().parent / "static"
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def pwa_manifest():
+    return FileResponse(
+        _PWA_STATIC / "manifest.webmanifest",
+        media_type="application/manifest+json"
+    )
+
+@app.get("/service-worker.js", include_in_schema=False)
+def pwa_service_worker():
+    return FileResponse(
+        _PWA_STATIC / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"}
+    )
+
+@app.get("/pwa-icon.svg", include_in_schema=False)
+def pwa_icon():
+    return FileResponse(
+        _PWA_STATIC / "pwa-icon.svg",
+        media_type="image/svg+xml"
+    )
 
 
 class ChatRequest(BaseModel):
@@ -90,6 +116,12 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NEXUS AI">
+<link rel="apple-touch-icon" href="/pwa-icon.svg">
 
 <title>NEXUS AI Control Centre</title>
 
@@ -386,6 +418,16 @@ loadDashboard();
 
 </script>
 
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/service-worker.js")
+            .catch(error => console.warn(
+                "NEXUS service worker registration failed:", error
+            ));
+    });
+}
+</script>
 </body>
 </html>
 """)
