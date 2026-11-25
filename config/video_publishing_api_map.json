@@ -1,0 +1,219 @@
+{
+  "integrations/tiktok/client.py": {
+    "status": "INSPECTED",
+    "functions": [],
+    "classes": [
+      {
+        "name": "NexusTikTokClient",
+        "methods": [
+          {
+            "name": "__init__",
+            "signature": "self",
+            "async": false
+          },
+          {
+            "name": "_get",
+            "signature": "self, endpoint, params=None",
+            "async": false
+          },
+          {
+            "name": "verify_account",
+            "signature": "self",
+            "async": false
+          }
+        ]
+      }
+    ]
+  },
+  "integrations/tiktok/oauth.py": {
+    "status": "INSPECTED",
+    "functions": [],
+    "classes": [
+      {
+        "name": "TikTokOAuth",
+        "methods": [
+          {
+            "name": "__init__",
+            "signature": "self",
+            "async": false
+          },
+          {
+            "name": "authorization_url",
+            "signature": "self, scopes=None",
+            "async": false
+          },
+          {
+            "name": "exchange_code",
+            "signature": "self, code, state",
+            "async": false
+          },
+          {
+            "name": "refresh",
+            "signature": "self",
+            "async": false
+          }
+        ]
+      }
+    ]
+  },
+  "integrations/tiktok/secure_storage.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "save_tokens",
+        "async": false,
+        "signature": "token"
+      },
+      {
+        "name": "load_tokens",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "delete_tokens",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "token_status",
+        "async": false,
+        "signature": ""
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/oauth.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "get_credentials",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "connect_youtube",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "get_youtube_service",
+        "async": false,
+        "signature": ""
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/secure_storage.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "save_tokens",
+        "async": false,
+        "signature": "token"
+      },
+      {
+        "name": "load_tokens",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "delete_tokens",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "token_status",
+        "async": false,
+        "signature": ""
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/channel.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "get_my_channel",
+        "async": false,
+        "signature": ""
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/manager.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "status",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "channel",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "publishing_controls",
+        "async": false,
+        "signature": ""
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/tools.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "youtube_status",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "youtube_channel",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "youtube_controls",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "youtube_upload",
+        "async": false,
+        "signature": "**kwargs"
+      },
+      {
+        "name": "youtube_upload_autonomous",
+        "async": false,
+        "signature": "**kwargs"
+      }
+    ],
+    "classes": []
+  },
+  "integrations/youtube/upload.py": {
+    "status": "INSPECTED",
+    "functions": [
+      {
+        "name": "load_config",
+        "async": false,
+        "signature": ""
+      },
+      {
+        "name": "upload_video",
+        "async": false,
+        "signature": "video_path, title, description='', tags=None, category_id='22', privacy_status=None, approved=False, made_for_kids=None"
+      },
+      {
+        "name": "upload_video_autonomous",
+        "async": false,
+        "signature": "**kwargs"
+      }
+    ],
+    "classes": []
+  },
+  "instagram_candidates": [
+    "skills\\signal_commander\\metadata_enricher.py"
+  ]
+}

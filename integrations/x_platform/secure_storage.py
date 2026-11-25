@@ -29,3 +29,15 @@ def token_status():
         "refresh_available": bool(token and token.get("refresh_token")),
         "storage": "Windows Credential Manager"
     }
+import keyring
+
+SERVICE = "NEXUS-AI-X-OAUTH"
+
+def save_client_secret(secret):
+    if not secret:
+        raise ValueError("Client secret required")
+    keyring.set_password(SERVICE, "client_secret", secret)
+    return True
+
+def load_client_secret():
+    return keyring.get_password(SERVICE, "client_secret")

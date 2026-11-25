@@ -1,4 +1,4 @@
-﻿"""Safety-controlled YouTube upload engine."""
+"""Safety-controlled YouTube upload engine."""
 import json
 from pathlib import Path
 from integrations.youtube.oauth import get_youtube_service
@@ -22,6 +22,10 @@ def upload_video(
     approved=False,
     made_for_kids=None,
 ):
+    from integrations.video_clipping.media_preflight import validate_for_platform
+    _media_check = validate_for_platform(video_path, 'youtube')
+    if not _media_check.get('valid'):
+        raise ValueError('YouTube media preflight rejected upload: ' + '; '.join(_media_check.get('errors', [])))
     if not isinstance(made_for_kids, bool):
         raise ValueError("Explicit made_for_kids True/False declaration required.")
 
@@ -93,26 +97,23 @@ def upload_video(
 
 
 def upload_video_autonomous(**kwargs):
-    """Restricted autonomous uploads: private videos only."""
-    from core.settings import load_settings
+    """Video-policy-authorized autonomous YouTube upload."""
+    from integrations.video_clipping.video_authorization import authorize_publication
 
-    settings = load_settings()
+    kwargs.pop("approved", None)
+    privacy = kwargs.pop("privacy_status", None) or "private"
+    authorize_publication("youtube", privacy)
+
     config = load_config()
-
-    if not settings.get("autonomous_mode", False):
-        raise PermissionError("NEXUS autonomous mode is disabled.")
-
-    if not config.get("allow_autonomous_private_uploads", False):
-        raise PermissionError("Autonomous private uploads are not authorized in config.")
-
+    if privacy == "private" and config.get("allow_autonomous_private_uploads") is not True:
+        raise PermissionError("Autonomous private YouTube uploads are disabled.")
+    if privacy == "public" and config.get("allow_public_publish") is not True:
+        raise PermissionError("Public YouTube publishing is disabled.")
     if "made_for_kids" not in kwargs or not isinstance(kwargs["made_for_kids"], bool):
         raise ValueError("Explicit made_for_kids declaration required.")
 
-    kwargs.pop("approved", None)
-    kwargs.pop("privacy_status", None)
-
     return upload_video(
         **kwargs,
-        privacy_status="private",
+        privacy_status=privacy,
         approved=True,
     )

@@ -1,0 +1,8 @@
+{
+  "mining_enabled": false,
+  "autonomous_restart_enabled": false,
+  "autonomous_execution_enabled": false,
+  "stop_when_unprofitable": true,
+  "maximum_restarts_per_hour": 3,
+  "minimum_available_ram_gb": 2.5
+}

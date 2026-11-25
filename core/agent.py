@@ -44,6 +44,11 @@ class NexusAgent:
     "x_analytics",
     "x_search_trends",
     "x_account_timeline",
+            "mt5_get_account",
+            "mt5_get_price",
+            "mt5_get_positions",
+            "mt5_get_history",
+            "mt5_get_strategy_signal",
         ]
 
         youtube_config = load_config()
@@ -253,7 +258,7 @@ Never bypass security restrictions.
                         equity = f"{equity:,.2f}"
 
                     formatted_results.append(
-                        "NEXUS AI â€” MT5 ACCOUNT\n"
+                        "NEXUS AI Ã¢â‚¬â€ MT5 ACCOUNT\n"
                         "------------------------------\n"
                         f"Server: {data.get('server', 'N/A')}\n"
                         f"Balance: {balance} {data.get('currency', '')}\n"
@@ -311,6 +316,22 @@ Never bypass security restrictions.
         save_message("assistant", answer)
 
         return answer
+
+    async def run_mining_cycle(self, opportunities=None, electricity_price_per_kwh=None, hardware=None):
+        """Central Brain interface for policy-controlled mining decisions."""
+        from integrations.xmrig import autopilot
+
+        if opportunities is None or hardware is None or electricity_price_per_kwh is None:
+            return {
+                "status": "INPUT_REQUIRED",
+                "required": ["market opportunities", "electricity price", "hardware telemetry"]
+            }
+
+        return autopilot.run_cycle(
+            opportunities=opportunities,
+            electricity_price_per_kwh=electricity_price_per_kwh,
+            hardware=hardware
+        )
 
     async def ask_specialist(self, skill_name, question):
 
@@ -395,4 +416,3 @@ Respect all NEXUS AI safety rules.
 
 
 from core.settings import load_settings
-

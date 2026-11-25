@@ -10,6 +10,7 @@ EXE = MINER / "xmrig.exe"
 BASE_CONFIG = MINER / "config.json"
 RUNTIME_CONFIG = ROOT / "config" / "xmrig.runtime.json"
 STATE = ROOT / "config" / "xmrig.state.json"
+PROFILES = ROOT / "config" / "xmrig.profiles.json"
 LOG = ROOT / "logs" / "xmrig.log"
 
 
@@ -89,39 +90,105 @@ def health():
     return result
 
 
-def configure_pool(url, wallet, password="x", tls=False):
-    if not isinstance(url, str) or not isinstance(wallet, str):
-        raise ValueError("Pool URL and wallet must be text.")
-    if not url.strip() or not wallet.strip():
-        raise ValueError("Pool URL and wallet are required.")
-    if "donate.v2.xmrig.com" in url.lower():
-        raise ValueError("The XMRig donation endpoint cannot be used as your pool.")
-    if "://" in url or any(ch.isspace() for ch in url):
-        raise ValueError("Enter pool as hostname:port, without a URL scheme.")
+
+def configure_pools(coin, algorithm, pools, threads=25):
+    """Configure one coin profile with multiple compatible failover pools."""
+    if not isinstance(coin, str) or not coin.strip():
+        raise ValueError("Coin name is required.")
+    if not isinstance(algorithm, str) or not algorithm.strip():
+        raise ValueError("XMRig algorithm is required.")
+    if not isinstance(pools, list) or not pools:
+        raise ValueError("At least one mining pool is required.")
+
+    normalized = []
+    for item in pools:
+        if not isinstance(item, dict):
+            raise ValueError("Each pool must be an object.")
+
+        url = str(item.get("url", "")).strip()
+        wallet = str(item.get("wallet", "")).strip()
+        password = str(item.get("password", "x") or "x")
+        tls = bool(item.get("tls", False))
+
+        if not url or not wallet:
+            raise ValueError("Every pool requires a URL and wallet.")
+        if "://" in url or any(ch.isspace() for ch in url):
+            raise ValueError("Pool URL must be hostname:port.")
+        if "donate.v2.xmrig.com" in url.lower():
+            raise ValueError("XMRig donation endpoint is not an allowed pool.")
+
+        normalized.append({
+            "url": url,
+            "user": wallet,
+            "pass": password,
+            "keepalive": True,
+            "tls": tls,
+            "coin": coin.strip().lower(),
+            "algo": algorithm.strip()
+        })
+
+    try:
+        threads = int(threads)
+    except (TypeError, ValueError):
+        raise ValueError("Thread limit must be an integer.")
+    if not 1 <= threads <= 100:
+        raise ValueError("Thread limit must be between 1 and 100.")
 
     config = _read_json(BASE_CONFIG)
     if not config:
         raise RuntimeError("Original XMRig configuration could not be read.")
 
-    config["pools"] = [{
-        "url": url.strip(),
-        "user": wallet.strip(),
-        "pass": password or "x",
-        "keepalive": True,
-        "tls": bool(tls)
-    }]
-
+    config["pools"] = normalized
     config.setdefault("cpu", {})["enabled"] = True
-    config["cpu"]["max-threads-hint"] = 25
+    config["cpu"]["max-threads-hint"] = threads
     config["cpu"]["huge-pages"] = False
 
     _save_json(RUNTIME_CONFIG, config)
+
+    profiles = _read_json(PROFILES, {})
+    profiles[coin.strip().lower()] = {
+        "coin": coin.strip().lower(),
+        "algorithm": algorithm.strip(),
+        "pool_count": len(normalized),
+        "configured_at": time.time()
+    }
+    _save_json(PROFILES, profiles)
+
     return {
         "status": "CONFIGURED",
-        "pool": url.strip(),
-        "wallet_saved": True,
-        "cpu_thread_hint": 25,
+        "coin": coin.strip().lower(),
+        "algorithm": algorithm.strip(),
+        "pool_count": len(normalized),
+        "failover_enabled": len(normalized) > 1,
+        "cpu_thread_hint": threads,
         "original_config_preserved": True
+    }
+
+
+def configure_pool(url, wallet, password="x", tls=False):
+    return configure_pools(
+        coin="custom",
+        algorithm="",
+        pools=[{
+            "url": url,
+            "wallet": wallet,
+            "password": password,
+            "tls": tls
+        }]
+    )
+
+
+def list_coin_profiles():
+    profiles = _read_json(PROFILES, {})
+    active = _read_json(RUNTIME_CONFIG, {})
+    active_pools = active.get("pools", [])
+    return {
+        "profiles": profiles,
+        "active_coin": (
+            active_pools[0].get("coin")
+            if active_pools else None
+        ),
+        "configured_pool_count": len(active_pools)
     }
 
 
@@ -224,6 +291,7 @@ def logs(lines=30):
     ).splitlines()[-max(1, min(int(lines), 100)):])
 
 
+
 def recovery_check():
     state = _read_json(STATE)
     pid = state.get("pid")
@@ -232,31 +300,73 @@ def recovery_check():
         return {"status": "IDLE", "crash_detected": False}
 
     actual = _process_executable(pid)
-
     if actual and os.path.normcase(actual) == os.path.normcase(str(EXE)):
         return {"status": "RUNNING", "crash_detected": False, "pid": int(pid)}
 
     STATE.unlink(missing_ok=True)
 
+    policy_path = ROOT / "config" / "xmrig.policy.json"
+    emergency_stop = ROOT / "config" / "MINING_EMERGENCY_STOP"
+    policy = _read_json(policy_path, {})
+
     memory = health()
     available = memory.get("available_ram_gb")
+    now = time.time()
+
+    history = _read_json(ROOT / "config" / "xmrig.recovery.json", {})
+    attempts = [
+        x for x in history.get("attempts", [])
+        if now - float(x.get("timestamp", 0)) < 3600
+    ]
 
     event = {
         "event": "XMRIG_EXITED_UNEXPECTEDLY",
         "previous_pid": pid,
-        "detected_at": time.time(),
+        "detected_at": now,
         "available_ram_gb": available,
         "automatic_restart": False
     }
 
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a", encoding="utf-8") as f:
-        f.write("\\nRECOVERY EVENT: " + json.dumps(event) + "\\n")
+        f.write("\nRECOVERY EVENT: " + json.dumps(event) + "\n")
 
-    return {
-        "status": "CRASH_DETECTED",
-        "crash_detected": True,
-        "restart_authorized": False,
-        "available_ram_gb": available,
-        "restart_blocked": not isinstance(available, (int, float)) or available < 2.5
-    }
+    if emergency_stop.exists():
+        return {"status": "RESTART_BLOCKED", "reason": "Emergency stop active"}
+
+    if policy.get("mining_enabled") is not True:
+        return {"status": "CRASH_DETECTED", "restart_authorized": False,
+                "reason": "Mining is not enabled in policy"}
+
+    if policy.get("autonomous_restart_enabled") is not True:
+        return {"status": "CRASH_DETECTED", "restart_authorized": False,
+                "reason": "Autonomous restart is not enabled"}
+
+    if len(attempts) >= int(policy.get("maximum_restarts_per_hour", 3)):
+        return {"status": "RESTART_BLOCKED", "reason": "Hourly restart limit reached"}
+
+    if not isinstance(available, (int, float)) or available < float(
+        policy.get("minimum_available_ram_gb", 2.5)
+    ):
+        return {"status": "RESTART_BLOCKED", "reason": "Insufficient available RAM"}
+
+    if not EXE.is_file() or not RUNTIME_CONFIG.is_file():
+        return {"status": "RESTART_BLOCKED", "reason": "Miner or runtime configuration missing"}
+
+    attempts.append({"timestamp": now, "previous_pid": pid})
+    _save_json(ROOT / "config" / "xmrig.recovery.json", {"attempts": attempts})
+
+    try:
+        result = start()
+        return {
+            "status": "RESTARTED" if result.get("status") == "STARTED" else result.get("status"),
+            "crash_detected": True,
+            "restart_authorized": True,
+            "restart": result
+        }
+    except Exception as exc:
+        return {
+            "status": "RESTART_FAILED",
+            "crash_detected": True,
+            "reason": str(exc)
+        }

@@ -1,13 +1,19 @@
-﻿{
+{
   "platform": "youtube",
-  "enabled": false,
-  "publishing_enabled": false,
+  "enabled": true,
+  "publishing_enabled": true,
   "default_privacy": "private",
-  "require_human_approval": true,
-  "allow_public_publish": false,
-  "allow_scheduling": false,
+  "require_human_approval": false,
+  "allow_public_publish": true,
+  "allow_scheduling": true,
   "max_uploads_per_day": 3,
   "max_video_size_mb": 512,
-  "allowed_video_extensions": [".mp4", ".mov", ".mkv"],
-  "credentials_storage": "windows_credential_manager"
+  "allowed_video_extensions": [
+    ".mp4",
+    ".mov",
+    ".mkv"
+  ],
+  "credentials_storage": "windows_credential_manager",
+  "allow_autonomous_private_uploads": true,
+  "allow_unlisted_publish": false
 }

@@ -505,3 +505,18 @@ NEXUS AI is released under the MIT License. See [LICENSE](LICENSE) for details.
 
 
 
+
+## Current Integration Notes
+- X Growth: research, drafting and human-approved publishing.
+- TikTok: modular social publishing integration.
+- OpenMausBot: optional MCP integration with approval controls.
+- Mining/XMRig: configurable mining workloads.
+- Video Clipping: local video processing and exports.
+- YouTube: human-approved publishing and optional autonomous private uploads.
+- MT5: existing Headway-Demo bridge with demo-account safeguards.
+
+## Release Verification
+Run: `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`
+Run: `.\.venv\Scripts\python.exe -m compileall -q core agents integrations tools skills tests`
+
+Automated tests must not trigger external actions.

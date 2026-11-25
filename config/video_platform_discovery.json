@@ -1,0 +1,52 @@
+{
+  "youtube_upload_candidates": [
+    {
+      "module": "integrations.youtube.tools",
+      "function": "upload_video",
+      "signature": "(video_path, title, description='', tags=None, category_id='22', privacy_status=None, approved=False, made_for_kids=None)"
+    },
+    {
+      "module": "integrations.youtube.tools",
+      "function": "youtube_upload",
+      "signature": "(**kwargs)"
+    },
+    {
+      "module": "integrations.youtube.tools",
+      "function": "youtube_upload_autonomous",
+      "signature": "(**kwargs)"
+    },
+    {
+      "module": "integrations.youtube.upload",
+      "function": "can_upload",
+      "signature": "(limit=3)"
+    },
+    {
+      "module": "integrations.youtube.upload",
+      "function": "record_upload",
+      "signature": "(limit=3)"
+    },
+    {
+      "module": "integrations.youtube.upload",
+      "function": "upload_video",
+      "signature": "(video_path, title, description='', tags=None, category_id='22', privacy_status=None, approved=False, made_for_kids=None)"
+    },
+    {
+      "module": "integrations.youtube.upload",
+      "function": "upload_video_autonomous",
+      "signature": "(**kwargs)"
+    },
+    {
+      "module": "integrations.youtube.upload_limiter",
+      "function": "can_upload",
+      "signature": "(limit=3)"
+    },
+    {
+      "module": "integrations.youtube.upload_limiter",
+      "function": "record_upload",
+      "signature": "(limit=3)"
+    }
+  ],
+  "tiktok_adapter": "API integration required",
+  "instagram_reels_adapter": "Graph API integration required",
+  "credentials_values_collected": false
+}

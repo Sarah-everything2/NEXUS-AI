@@ -77,3 +77,10 @@ models/
 secrets/
 skills/signal_commander/reports/
 
+# Local environments, caches and development backups
+venv/
+*.py.backup*
+*.py.*-backup
+*.py.before_*
+*.py.autostart-backup
+temp/

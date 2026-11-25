@@ -1,4 +1,4 @@
-﻿"""YouTube tools with mandatory human approval."""
+"""YouTube tools: interactive uploads require approval; queue uploads use video policy."""
 from integrations.youtube.manager import status, channel, publishing_controls
 from integrations.youtube.upload import upload_video
 from tools.approval import approve_tool_call
@@ -29,9 +29,8 @@ def youtube_upload(**kwargs):
     return upload_video(**arguments, approved=True)
 
 def youtube_upload_autonomous(**kwargs):
-    """Autonomous YouTube uploads restricted to private visibility."""
+    """Autonomous YouTube uploads authorized by the video-specific policy."""
     from integrations.youtube.upload import upload_video_autonomous
 
     kwargs.pop("approved", None)
-    kwargs.pop("privacy_status", None)
     return upload_video_autonomous(**kwargs)

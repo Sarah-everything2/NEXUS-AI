@@ -1,0 +1,38 @@
+{
+  "platforms": {
+    "youtube": {
+      "enabled": true,
+      "autonomous_private": true,
+      "autonomous_public": true,
+      "scheduling": true
+    },
+    "tiktok": {
+      "enabled": true,
+      "autonomous_private": true,
+      "autonomous_public": true,
+      "scheduling": true
+    },
+    "instagram_reels": {
+      "enabled": true,
+      "autonomous_private": false,
+      "autonomous_public": true,
+      "scheduling": true
+    }
+  },
+  "require_account_verification": true,
+  "require_upload_preflight": true,
+  "max_upload_attempts": 1,
+  "never_retry_uncertain_uploads": true,
+  "tiktok": {
+    "enabled": true,
+    "publishing_enabled": true,
+    "api": "Content Posting API",
+    "requires_explicit_consent": true
+  },
+  "instagram": {
+    "enabled": true,
+    "publishing_enabled": true,
+    "api": "Meta Graph API",
+    "requires_explicit_consent": true
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "automatic_processing": true,
+  "maximum_jobs_per_cycle": 1,
+  "maximum_retries": 0,
+  "maximum_output_shorts_per_video": 10,
+  "minimum_clip_seconds": 3,
+  "maximum_clip_seconds": 90,
+  "allow_public_upload": true,
+  "allow_private_upload": true,
+  "auto_publish_enabled": true,
+  "default_publish_privacy": "private",
+  "maximum_publications_per_cycle": 1,
+  "cross_platform_publishing": true,
+  "require_account_verification": true,
+  "require_upload_preflight": true,
+  "emergency_stop": false,
+  "platforms": {
+    "youtube": {
+      "enabled": true,
+      "autonomous_private": true,
+      "autonomous_public": true
+    },
+    "tiktok": {
+      "enabled": true,
+      "autonomous_private": true,
+      "autonomous_public": true
+    },
+    "instagram_reels": {
+      "enabled": true,
+      "autonomous_private": false,
+      "autonomous_public": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+﻿name: NEXUS AI CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python: ["3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip check
+      - run: python -m unittest discover -s tests -v
+      - run: python -m compileall -q core agents integrations tools skills dashboard tests
+      - name: Dashboard smoke test
+        run: python -c "from fastapi.testclient import TestClient; from dashboard.app import app; c=TestClient(app); assert c.get('/').status_code == 200; assert c.get('/api/status').status_code == 200"

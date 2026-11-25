@@ -6,6 +6,12 @@ import platform
 import sqlite3
 import shutil
 from datetime import datetime
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.align import Align
+from rich import box
 from colorama import just_fix_windows_console
 just_fix_windows_console()
 from core.agent import NexusAgent
@@ -17,6 +23,8 @@ from integrations.mt5 import session_controller as mt5_session
 
 # NEXUS AI TERMINAL THEME
 class UI:
+
+    console = Console()
 
     RESET = "\033[0m"
     BOLD = "\033[1m"
@@ -66,64 +74,120 @@ class UI:
         print(UI.CYAN + "-" * 65 + UI.RESET)
 
     @staticmethod
+    @staticmethod
     def success(message):
-        print(f"{UI.GREEN}[+] {message}{UI.RESET}")
+        UI.console.print(Panel(
+            Text(str(message), style="bold bright_green"),
+            title="[bold bright_green]? SUCCESS[/]",
+            border_style="bright_green", box=box.ROUNDED, padding=(0, 1)
+        ))
 
+    @staticmethod
     @staticmethod
     def error(message):
-        print(f"{UI.RED}[!] {message}{UI.RESET}")
+        UI.console.print(Panel(
+            Text(str(message), style="bright_white"),
+            title="[bold bright_red]? SYSTEM NOTICE[/]",
+            border_style="bright_red", box=box.ROUNDED, padding=(0, 1)
+        ))
 
+    @staticmethod
     @staticmethod
     def info(message):
-        print(f"{UI.CYAN}[*] {message}{UI.RESET}")
+        UI.console.print(Text.assemble(
+            ("? ", "bold bright_cyan"), (str(message), "bright_white")
+        ))
 
+    @staticmethod
     @staticmethod
     def banner():
-
         UI.clear()
+        width = min(max(shutil.get_terminal_size((100, 30)).columns - 2, 64), 112)
+        logo = Text()
+        logo.append("N E X U S", style="bold bright_cyan")
+        logo.append("  A I", style="bold bright_magenta")
 
-        print(UI.CYAN + UI.BOLD)
-        print("             NEXUS AI COMMAND CENTRE")
-        print(UI.RESET)
+        hero = Table.grid(expand=True)
+        hero.add_column(justify="center")
+        hero.add_row(logo)
+        hero.add_row(Text("????????????????????????????????????????????????????", style="bright_blue"))
+        hero.add_row(Text("INTELLIGENCE  /  AUTOMATION  /  CREATION", style="bold bright_white"))
+        hero.add_row(Text("Think deeper. Move faster. Build without limits.", style="italic bright_magenta"))
+        hero.add_row(Text(""))
+        hero.add_row(Text(datetime.now().strftime("%A  |  %d %B %Y  |  %H:%M:%S"), style="dim bright_cyan"))
 
-        print(UI.PURPLE + UI.BOLD)
-        print("              YOUR PERSONAL AI ASSISTANT")
-        print(UI.RESET)
+        UI.console.print()
+        UI.console.print(Panel(
+            Align.center(hero, vertical="middle"),
+            width=width,
+            box=box.DOUBLE,
+            border_style="bright_magenta",
+            padding=(2, 3),
+            title="[bold bright_cyan]? NEXUS AI // CORE SYSTEM ?[/]",
+            subtitle="[bold bright_magenta] SECURE ? MODULAR ? INTELLIGENT [/]"
+        ))
 
-        UI.line()
+        quick = Table.grid(expand=True, padding=(0, 2))
+        for _ in range(4):
+            quick.add_column(justify="center")
+        quick.add_row(
+            "[bold bright_cyan]/agents[/]\n[dim]Specialists[/]",
+            "[bold bright_magenta]/skills[/]\n[dim]Capabilities[/]",
+            "[bold bright_green]/status[/]\n[dim]System health[/]",
+            "[bold bright_yellow]/help[/]\n[dim]Commands[/]"
+        )
+        UI.console.print(Panel(quick, border_style="bright_blue", box=box.ROUNDED))
+        UI.console.print()
+
+
 
     @staticmethod
+    @staticmethod
     def status():
-
         settings = load_settings()
+        try:
+            import psutil
+            cpu = f"{psutil.cpu_percent(interval=None):.0f}%"
+            memory = psutil.virtual_memory()
+            ram = f"{memory.percent:.0f}% used | {memory.available / (1024**3):.1f} GB free"
+        except Exception:
+            cpu, ram = "Unavailable", "Unavailable"
 
-        print(f"{UI.WHITE}SYSTEM STATUS{UI.RESET}")
-
-        print(
-            f"  Model:       "
-            f"{UI.GREEN}{settings['model'] or 'Not configured'}{UI.RESET}"
+        autonomous = bool(settings.get("autonomous_mode"))
+        approval = bool(settings.get("require_approval", True))
+        table = Table(
+            title="[bold bright_white]? LIVE SYSTEM OVERVIEW ?[/]",
+            caption="[dim]NEXUS AI ? LOCAL COMMAND CENTRE[/]",
+            box=box.ROUNDED,
+            border_style="bright_blue",
+            header_style="bold bright_magenta",
+            title_style="bold bright_cyan",
+            expand=True,
+            padding=(0, 1)
         )
+        table.add_column("SYSTEM COMPONENT", style="bold bright_white")
+        table.add_column("LIVE STATE", style="bright_cyan")
+        table.add_column("INDICATOR", justify="right")
 
-        print(
-            f"  Autonomous:  "
-            f"{UI.GREEN if settings['autonomous_mode'] else UI.YELLOW}"
-            f"{'ENABLED' if settings['autonomous_mode'] else 'DISABLED'}"
-            f"{UI.RESET}"
-        )
+        table.add_row("AI PROVIDER", str(settings.get("ai_provider") or "Not configured").upper(), "[green]? CONFIGURED[/]")
+        table.add_row("AI MODEL", str(settings.get("model") or "Not configured"), "[cyan]? SELECTED[/]")
+        table.add_row("AUTONOMOUS MODE", "ENABLED" if autonomous else "DISABLED",
+                      "[green]? ACTIVE[/]" if autonomous else "[yellow]? STANDBY[/]")
+        table.add_row("ACTION APPROVAL", "REQUIRED" if approval else "NOT REQUIRED",
+                      "[green]? PROTECTED[/]" if approval else "[red]? REVIEW[/]")
+        table.add_row("SPECIALIST AGENTS", str(len(settings.get("agents", []))), "[bright_magenta]? REGISTERED[/]")
+        table.add_row("ENABLED SKILLS", str(len(settings.get("enabled_skills", []))), "[bright_magenta]? AVAILABLE[/]")
+        table.add_row("CPU UTILIZATION", cpu, "[cyan]? TELEMETRY[/]")
+        table.add_row("MEMORY", ram, "[cyan]? TELEMETRY[/]")
+        table.add_row("OPERATING SYSTEM", f"{platform.system()} {platform.release()}", "[green]? DETECTED[/]")
 
-        print(
-            f"  Approval:    "
-            f"{UI.YELLOW}"
-            f"{'REQUIRED' if settings['require_approval'] else 'NOT REQUIRED'}"
-            f"{UI.RESET}"
-        )
+        UI.console.print(table)
+        UI.console.print(Align.center(Text(
+            "ALL SYSTEM ACTIONS REMAIN SUBJECT TO CONFIGURED SAFETY CONTROLS",
+            style="dim bright_cyan"
+        )))
+        UI.console.print()
 
-        print(
-            f"  Skills:      "
-            f"{UI.CYAN}{len(settings['enabled_skills'])} registered{UI.RESET}"
-        )
-
-        UI.line()
 
     @staticmethod
     def diagnostics(agent):
@@ -310,50 +374,89 @@ class UI:
             UI.error("Usage: /autonomous [on/off]")
 
     @staticmethod
+    @staticmethod
     def help():
-
-        print(f"\n{UI.BOLD}{UI.CYAN}NEXUS AI COMMAND CENTRE{UI.RESET}")
-
-        commands = [
-            ("/help", "Display commands"),
-            ("/skills", "Explore available skills"),
-            ("/agents", "View specialist agents"),
-            ("/tools", "View registered tools"),
-            ("/use <skill> <request>", "Use a specialist agent"),
-            ("/research <url>", "Research a webpage"),
-            ("/x-growth", "Research opportunities and generate X drafts"),
-            ("/x-drafts", "List saved X drafts"),
-            ("/x-preview <id>", "Preview an X draft"),
-            ("/x-publish <id>", "Request approval to publish an X draft"),
-            ("/x-analytics", "View X publication analytics"),
-            ("/schedule add 10m <message>", "Create a reminder"),
-            ("/schedule list", "View scheduled reminders"),
-            ("/schedule cancel <id>", "Cancel a reminder"),
-            ("/history", "View conversation history"),
-            ("/settings", "Open configuration and safety manager"),
-            ("/autonomous", "View autonomous mode status"),
-            ("/autonomous on/off", "Enable or disable autonomous mode"),
-            ("/trading-plan", "View today's demo trading plan"),
-            ("/trading-go", "Approve and start today's demo session"),
-            ("/trading-stop", "Request graceful demo session stop"),
-            ("/trading-status", "Check demo session processes"),
-            ("/config", "View system configuration"),
-            ("/status", "View live system status"),
-            ("/diagnostics", "Run system health checks"),
-            ("/backup", "Create a memory database backup"),
-            ("/memory", "Explore conversation and research memory"),
-            ("/export", "Export conversations and research to JSON"),
-            ("/clear", "Clear terminal"),
-            ("/exit", "Close NEXUS AI")
-        ]
-
-        for command, description in commands:
-            print(
-                f"  {UI.GREEN}{command:<38}{UI.RESET}"
-                f"{UI.GRAY}{description}{UI.RESET}"
+        groups = {
+            "01  BRAIN & INTELLIGENCE": [
+                ("/agents", "Explore specialist agents"),
+                ("/skills", "Browse NEXUS capabilities"),
+                ("/tools", "Inspect registered tools"),
+                ("/use <skill> <request>", "Activate a specialist"),
+                ("/research <url>", "Research a webpage"),
+                ("/history", "Conversation history"),
+                ("/memory", "Persistent memory"),
+            ],
+            "02  X GROWTH & CONTENT": [
+                ("/x-growth", "Discover opportunities and create drafts"),
+                ("/x-drafts", "Browse saved drafts"),
+                ("/x-preview <id>", "Preview a draft"),
+                ("/x-publish <id>", "Request human publication approval"),
+                ("/x-analytics", "Review publication analytics"),
+            ],
+            "03  AUTOMATION": [
+                ("/schedule add 10m <message>", "Create a reminder"),
+                ("/schedule list", "View reminders"),
+                ("/schedule cancel <id>", "Cancel a reminder"),
+            ],
+            "04  MT5 BRIDGE": [
+                ("/mt5-server-status", "Inspect bridge status"),
+                ("/mt5-server-start", "Start or reuse the bridge"),
+                ("/mt5-server-restart", "Restart the bridge"),
+                ("/mt5-server-stop", "Stop the bridge"),
+            ],
+            "05  MT5 DEMO TRADING": [
+                ("/trading-plan", "View demo trading plan"),
+                ("/trading-go", "Approve and start a demo session"),
+                ("/trading-status", "Inspect trading session"),
+                ("/trading-stop", "Stop trading"),
+                ("/trading-emergency-stop", "Emergency stop"),
+                ("/trading-emergency-clear", "Request emergency-stop clearance"),
+            ],
+            "06  SYSTEM": [
+                ("/status", "Live system dashboard"),
+                ("/config", "System configuration"),
+                ("/settings", "Settings and safeguards"),
+                ("/autonomous", "View autonomous mode"),
+                ("/autonomous on/off", "Change autonomous mode"),
+                ("/diagnostics", "System health checks"),
+                ("/backup", "Back up memory database"),
+                ("/export", "Export conversations and research"),
+            ],
+            "07  TERMINAL": [
+                ("/help", "Command directory"),
+                ("/clear", "Clear terminal"),
+                ("/exit", "Close NEXUS AI"),
+            ],
+        }
+        UI.console.print()
+        UI.console.print(Panel(
+            Align.center(Text.assemble(
+                ("N E X U S", "bold bright_cyan"),
+                ("  A I", "bold bright_magenta"),
+                ("\nCOMMAND CENTRE", "bold bright_white"),
+                ("\nExplore  ?  Orchestrate  ?  Execute safely", "italic bright_cyan")
+            )),
+            border_style="bright_magenta", box=box.DOUBLE, padding=(1, 2)
+        ))
+        for i, (title, commands) in enumerate(groups.items()):
+            table = Table(
+                box=box.SIMPLE_HEAVY, expand=True,
+                header_style="bold bright_white", padding=(0, 1)
             )
-
-        print()
+            table.add_column("COMMAND", style="bold bright_cyan", no_wrap=True)
+            table.add_column("CAPABILITY", style="white")
+            for command, description in commands:
+                table.add_row(command, description)
+            UI.console.print(Panel(
+                table, title=f"[bold bright_magenta]{title}[/]",
+                border_style="bright_blue" if i % 2 == 0 else "bright_magenta",
+                box=box.ROUNDED, padding=(0, 1)
+            ))
+        UI.console.print(Align.center(
+            Text("? NEXUS AI  ?  INTELLIGENCE AT YOUR COMMAND ?",
+                 style="bold bright_cyan")
+        ))
+        UI.console.print()
 
 
 async def chat():
@@ -364,18 +467,27 @@ async def chat():
     UI.banner()
     UI.status()
 
-    print(f"{UI.GREEN}- NEXUS AI CONTROL CENTRE ONLINE{UI.RESET}")
-    print(f"{UI.GRAY}Type /help to explore your assistant.{UI.RESET}\n")
+    UI.console.print(Panel(
+        Align.center(Text.assemble(
+            ("? ", "bold bright_green"),
+            ("NEXUS CORE ONLINE", "bold bright_white"),
+            ("\\nType ", "dim"),
+            ("/help", "bold bright_cyan"),
+            (" to explore your command centre.", "dim")
+        )),
+        border_style="bright_green",
+        box=box.ROUNDED,
+        padding=(0, 2)
+    ))
 
     while True:
 
         try:
-            prompt = (
-                f"{UI.BOLD}{UI.GREEN}YOU {UI.RESET}"
-                f"{UI.CYAN}> {UI.RESET}"
-            )
+            prompt = "[bold bright_magenta]? NEXUS[/] [bold bright_cyan]?[/] "
 
-            question = (await asyncio.to_thread(input, prompt)).strip()
+            question = (await asyncio.to_thread(
+                UI.console.input, prompt
+            )).strip()
 
             if not question:
                 continue
@@ -478,6 +590,31 @@ async def chat():
                     UI.error("Invalid schedule command. Type /schedule help.")
                     continue
 
+            if command == "/mt5-server-status":
+                mt5_session.bridge_server_status()
+                continue
+
+            elif command == "/mt5-server-start":
+                try:
+                    mt5_session.start_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API start failed: {error}")
+                continue
+
+            elif command == "/mt5-server-restart":
+                try:
+                    mt5_session.restart_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API restart failed: {error}")
+                continue
+
+            elif command == "/mt5-server-stop":
+                try:
+                    mt5_session.stop_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API stop failed: {error}")
+                continue
+
             if command == "/trading-plan":
                 mt5_session.show_plan()
                 continue
@@ -502,6 +639,17 @@ async def chat():
 
             elif command == "/trading-status":
                 mt5_session.status()
+                continue
+
+            elif command == "/trading-emergency-stop":
+                mt5_session.emergency_stop()
+                continue
+
+            elif command == "/trading-emergency-clear":
+                try:
+                    mt5_session.clear_emergency_stop()
+                except Exception as error:
+                    UI.error(f"Emergency stop clearance blocked: {error}")
                 continue
 
             if command == "/exit":
@@ -642,38 +790,45 @@ async def chat():
                 continue
 
             elif command == "/tools":
-
-                print(f"\n{UI.CYAN}{UI.BOLD}REGISTERED TOOLS{UI.RESET}")
-
-                for tool in agent.available_tools():
-                    print(f"  {UI.GREEN}-{UI.RESET} {tool}")
-
-                print()
+                tools = sorted(agent.available_tools())
+                table = Table(title=f"REGISTERED TOOLS  ?  {len(tools)}", box=box.ROUNDED, border_style="bright_cyan", expand=True)
+                table.add_column("#", style="dim", width=5)
+                table.add_column("TOOL", style="bold bright_cyan")
+                table.add_column("STATUS", justify="right")
+                for index, tool in enumerate(tools, 1):
+                    table.add_row(str(index), str(tool), "[green]REGISTERED[/]")
+                UI.console.print(table)
                 continue
 
             elif command == "/skills":
-
-                print(f"\n{UI.CYAN}{UI.BOLD}AVAILABLE SKILLS{UI.RESET}")
-
-                for skill in agent.available_skills():
-                    print(f"  {UI.GREEN}-{UI.RESET} {skill}")
-
-                print()
+                skills = sorted(agent.available_skills())
+                table = Table(title=f"NEXUS CAPABILITY LIBRARY  ?  {len(skills)} SKILLS", box=box.ROUNDED, border_style="bright_magenta", expand=True)
+                table.add_column("#", style="dim", width=5)
+                table.add_column("SKILL", style="bold bright_white")
+                table.add_column("AVAILABILITY", style="green", justify="right")
+                for index, skill in enumerate(skills, 1):
+                    table.add_row(str(index), str(skill), "READY")
+                UI.console.print(table)
                 continue
 
             elif command == "/agents":
-
                 from agents.manager import list_agents
 
-                print(f"\n{UI.CYAN}{UI.BOLD}SPECIALIST AGENTS{UI.RESET}")
-
-                for agent_id, details in list_agents().items():
-
-                    print(f"\n{UI.YELLOW}{details['name']}{UI.RESET}")
-                    print(f"  ID: {agent_id}")
-                    print(f"  Skills: {', '.join(details['skills'])}")
-
-                print()
+                agents = list_agents()
+                UI.console.print(Panel(
+                    Align.center(Text(f"SPECIALIST AGENT NETWORK  ?  {len(agents)} AGENTS", style="bold bright_white")),
+                    border_style="bright_magenta",
+                    box=box.DOUBLE
+                ))
+                for agent_id, details in agents.items():
+                    skills = details.get("skills", [])
+                    card = Table.grid(padding=(0, 1))
+                    card.add_column(style="bold bright_cyan")
+                    card.add_column(style="white")
+                    card.add_row("AGENT", str(details.get("name", agent_id)))
+                    card.add_row("IDENTIFIER", str(agent_id))
+                    card.add_row("CAPABILITIES", ", ".join(map(str, skills)) or "No skills listed")
+                    UI.console.print(Panel(card, border_style="bright_cyan", box=box.ROUNDED))
                 continue
 
             elif command.startswith("/research"):
@@ -724,56 +879,87 @@ async def chat():
                     UI.error("Unknown skill.")
                     continue
 
-                print(f"\n{UI.PURPLE}Connecting to {skill_name} specialist...{UI.RESET}")
+                with UI.console.status(
+                    f"[bold bright_magenta]Connecting to {skill_name} specialist...",
+                    spinner="dots"
+                ):
+                    answer = await agent.ask_specialist(
+                        skill_name,
+                        specialist_question
+                    )
 
-                answer = await agent.ask_specialist(
-                    skill_name,
-                    specialist_question
-                )
-
-                print(f"\n{UI.PURPLE}{UI.BOLD}SPECIALIST RESPONSE{UI.RESET}")
-                print(answer)
-                print()
+                UI.console.print(Panel(
+                    str(answer),
+                    title=f"[bold bright_magenta] {skill_name.upper()} SPECIALIST [/]",
+                    subtitle="[italic bright_cyan] NEXUS SPECIALIST NETWORK [/]",
+                    border_style="bright_magenta",
+                    box=box.ROUNDED,
+                    padding=(1, 2)
+                ))
                 continue
 
             elif command == "/history":
-
                 history = get_recent_messages(10)
 
-                print(f"\n{UI.CYAN}{UI.BOLD}CONVERSATION HISTORY{UI.RESET}")
+                UI.console.print(Panel(
+                    Align.center(Text(
+                        f"CONVERSATION TIMELINE  ?  {len(history)} MESSAGES",
+                        style="bold bright_white"
+                    )),
+                    border_style="bright_cyan",
+                    box=box.DOUBLE
+                ))
 
-                for message in history:
-
-                    role = message["role"].upper()
-
-                    print(f"\n{UI.YELLOW}{role}{UI.RESET}")
-                    print(message["content"])
-
-                print()
+                for index, message in enumerate(history, 1):
+                    role = str(message.get("role", "unknown")).upper()
+                    content = str(message.get("content", ""))
+                    is_user = role == "USER"
+                    UI.console.print(Panel(
+                        content,
+                        title=f"[bold {'bright_green' if is_user else 'bright_cyan'}] {index:02d}  ?  {role} [/]",
+                        border_style="bright_green" if is_user else "bright_cyan",
+                        box=box.ROUNDED,
+                        padding=(1, 2)
+                    ))
                 continue
 
             # NORMAL AI CHAT
 
-            print(f"\n{UI.GRAY}NEXUS AI is processing your request...{UI.RESET}\n")
+            with UI.console.status(
+                "[bold bright_cyan]NEXUS is thinking...",
+                spinner="dots"
+            ):
+                answer = await agent.ask(question)
 
-            answer = await agent.ask(question)
-
-            print(f"{UI.CYAN}{UI.BOLD}NEXUS AI{UI.RESET}")
-            UI.line()
-            print(answer)
-            UI.line()
-            print()
+            UI.console.print(Panel(
+                str(answer),
+                title="[bold bright_cyan]? NEXUS INTELLIGENCE RESPONSE ?[/]",
+                subtitle="[italic bright_magenta] THINK  ?  REASON  ?  CREATE [/]",
+                border_style="bright_cyan",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            ))
+            UI.console.print()
 
         except KeyboardInterrupt:
-
-            print(f"\n\n{UI.YELLOW}Session interrupted.{UI.RESET}")
+            UI.console.print(Panel(
+                Align.center(Text("SESSION INTERRUPTED  ?  RETURNING SAFELY", style="bold yellow")),
+                border_style="yellow",
+                box=box.ROUNDED
+            ))
             mt5_session.stop_session()
             stop_scheduler()
             break
 
         except Exception as error:
-
-            UI.error(f"NEXUS AI ERROR: {error}")
+            UI.console.print(Panel(
+                Text(str(error), style="white"),
+                title="[bold red] NEXUS SYSTEM ERROR [/]",
+                subtitle="[dim] The session remains available unless a safety control stopped it. [/]",
+                border_style="red",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            ))
 
 
 if __name__ == "__main__":

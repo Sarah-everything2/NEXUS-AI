@@ -1,0 +1,272 @@
+{
+  "discovered_modules": [
+    {
+      "file": "integrations\\tiktok\\client.py",
+      "functions": [
+        "__init__",
+        "_get",
+        "verify_account"
+      ],
+      "classes": [
+        "NexusTikTokClient"
+      ],
+      "imports": [
+        "time",
+        "requests",
+        "integrations.tiktok.secure_storage",
+        "integrations.tiktok.oauth"
+      ]
+    },
+    {
+      "file": "integrations\\tiktok\\oauth.py",
+      "functions": [
+        "__init__",
+        "authorization_url",
+        "exchange_code",
+        "refresh"
+      ],
+      "classes": [
+        "TikTokOAuth"
+      ],
+      "imports": [
+        "os",
+        "secrets",
+        "hashlib",
+        "urllib.parse",
+        "time",
+        "requests",
+        "pathlib",
+        "dotenv",
+        "integrations.tiktok.secure_storage"
+      ]
+    },
+    {
+      "file": "integrations\\tiktok\\secure_storage.py",
+      "functions": [
+        "save_tokens",
+        "load_tokens",
+        "delete_tokens",
+        "token_status"
+      ],
+      "classes": [],
+      "imports": [
+        "json",
+        "keyring"
+      ]
+    },
+    {
+      "file": "integrations\\tiktok\\__init__.py",
+      "functions": [],
+      "classes": [],
+      "imports": []
+    },
+    {
+      "file": "integrations\\x_platform\\oauth.py",
+      "functions": [
+        "__init__",
+        "authorization_url",
+        "exchange_callback",
+        "create_client"
+      ],
+      "classes": [
+        "NexusXOAuth"
+      ],
+      "imports": [
+        "os",
+        "tweepy"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\channel.py",
+      "functions": [
+        "get_my_channel"
+      ],
+      "classes": [],
+      "imports": [
+        "integrations.youtube.oauth"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\manager.py",
+      "functions": [
+        "status",
+        "channel",
+        "publishing_controls"
+      ],
+      "classes": [],
+      "imports": [
+        "integrations.youtube.secure_storage",
+        "integrations.youtube.channel",
+        "integrations.youtube.upload"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\oauth.py",
+      "functions": [
+        "get_credentials",
+        "connect_youtube",
+        "get_youtube_service"
+      ],
+      "classes": [],
+      "imports": [
+        "os",
+        "pathlib",
+        "google.auth.transport.requests",
+        "google.oauth2.credentials",
+        "google_auth_oauthlib.flow",
+        "googleapiclient.discovery",
+        "integrations.youtube.secure_storage"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\secure_storage.py",
+      "functions": [
+        "save_tokens",
+        "load_tokens",
+        "delete_tokens",
+        "token_status"
+      ],
+      "classes": [],
+      "imports": [
+        "json",
+        "keyring"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "functions": [
+        "youtube_status",
+        "youtube_channel",
+        "youtube_controls",
+        "youtube_upload",
+        "youtube_upload_autonomous"
+      ],
+      "classes": [],
+      "imports": [
+        "integrations.youtube.manager",
+        "integrations.youtube.upload",
+        "tools.approval",
+        "integrations.youtube.upload"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\upload.py",
+      "functions": [
+        "load_config",
+        "upload_video",
+        "upload_video_autonomous"
+      ],
+      "classes": [],
+      "imports": [
+        "json",
+        "pathlib",
+        "integrations.youtube.oauth",
+        "integrations.youtube.upload_limiter",
+        "googleapiclient.http",
+        "core.settings"
+      ]
+    },
+    {
+      "file": "integrations\\youtube\\upload_limiter.py",
+      "functions": [
+        "load_state",
+        "can_upload",
+        "record_upload"
+      ],
+      "classes": [],
+      "imports": [
+        "json",
+        "datetime",
+        "pathlib"
+      ]
+    }
+  ],
+  "discovered_functions": [
+    {
+      "file": "integrations\\tiktok\\client.py",
+      "function": "verify_account"
+    },
+    {
+      "file": "integrations\\tiktok\\oauth.py",
+      "function": "refresh"
+    },
+    {
+      "file": "integrations\\tiktok\\secure_storage.py",
+      "function": "save_tokens"
+    },
+    {
+      "file": "integrations\\tiktok\\secure_storage.py",
+      "function": "load_tokens"
+    },
+    {
+      "file": "integrations\\tiktok\\secure_storage.py",
+      "function": "delete_tokens"
+    },
+    {
+      "file": "integrations\\tiktok\\secure_storage.py",
+      "function": "token_status"
+    },
+    {
+      "file": "integrations\\youtube\\oauth.py",
+      "function": "get_credentials"
+    },
+    {
+      "file": "integrations\\youtube\\oauth.py",
+      "function": "connect_youtube"
+    },
+    {
+      "file": "integrations\\youtube\\oauth.py",
+      "function": "get_youtube_service"
+    },
+    {
+      "file": "integrations\\youtube\\secure_storage.py",
+      "function": "save_tokens"
+    },
+    {
+      "file": "integrations\\youtube\\secure_storage.py",
+      "function": "load_tokens"
+    },
+    {
+      "file": "integrations\\youtube\\secure_storage.py",
+      "function": "delete_tokens"
+    },
+    {
+      "file": "integrations\\youtube\\secure_storage.py",
+      "function": "token_status"
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "function": "youtube_status"
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "function": "youtube_channel"
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "function": "youtube_controls"
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "function": "youtube_upload"
+    },
+    {
+      "file": "integrations\\youtube\\tools.py",
+      "function": "youtube_upload_autonomous"
+    }
+  ],
+  "credential_locations": [],
+  "environment_variable_names": [
+    "MT5_BRIDGE_TOKEN"
+  ],
+  "installed_libraries": {
+    "googleapiclient": true,
+    "google_auth_oauthlib": true,
+    "google.auth": true,
+    "requests": true,
+    "httpx": true,
+    "tiktok": false,
+    "instagrapi": false
+  },
+  "credential_values_collected": false
+}

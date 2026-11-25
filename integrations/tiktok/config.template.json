@@ -1,0 +1,15 @@
+﻿{
+  "platform": "tiktok",
+  "api_version": "v2",
+  "authorization_url": "https://www.tiktok.com/v2/auth/authorize/",
+  "token_url": "https://open.tiktokapis.com/v2/oauth/token/",
+  "api_base_url": "https://open.tiktokapis.com",
+  "scopes": ["user.info.basic", "video.list"],
+  "publishing_scopes": ["video.publish", "video.upload"],
+  "publishing_enabled": false,
+  "require_human_approval": true,
+  "credential_storage": "Windows Credential Manager",
+  "oauth_state_validation": true,
+  "pkce_enabled": true,
+  "demo_mode": true
+}
