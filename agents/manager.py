@@ -31,7 +31,8 @@ AGENTS = {
         "skills": [
             "mining",
             "memecoin_intelligence",
-            "nft_intelligence"
+            "nft_intelligence",
+            "signal_commander"
         ]
     }
 }
