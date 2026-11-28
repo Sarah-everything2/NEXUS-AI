@@ -11,6 +11,7 @@ from core.toolcalling.selector import ToolSelector
 from integrations.dspy import DSPyEngine
 from integrations.evolution import EvolutionEngine
 from integrations.autonomy import AutonomousCoordinator
+from integrations.agents import AgentRuntime
 from integrations.youtube.upload import load_config
 
 # Read-only operations and bounded local processing only.
@@ -42,6 +43,7 @@ class NexusAgent:
         self.user_id = str(user_id) if user_id is not None else None
         self.user_role = user_role
         self.ai = OllamaClient()
+        self.agent_runtime = AgentRuntime()
         self.tool_selector = ToolSelector(self.ai)
         self.intelligence = DSPyEngine()
         self.evolution = EvolutionEngine()
@@ -298,7 +300,7 @@ Return ONLY valid JSON in this format:
 }}
 """
 
-        response = await self.ai.generate([
+        response = await self.generate_response([
             {"role": "user", "content": prompt}
         ])
 
@@ -396,6 +398,12 @@ Never reveal passwords, private keys or recovery phrases.
 Never execute financial transactions without approval.
 Never bypass security restrictions.
 """
+
+    async def generate_response(self, messages):
+        """Generate through the configured provider runtime."""
+        return await self.agent_runtime.generate(
+            self.ai.generate, messages
+        )
 
     async def ask(self, question):
 
@@ -527,7 +535,7 @@ Never bypass security restrictions.
                 )
             })
 
-        answer = await self.ai.generate(messages)
+        answer = await self.generate_response(messages)
 
         save_message("assistant", answer, user_id=self.user_id)
 
@@ -574,7 +582,7 @@ Respect all NEXUS AI safety rules.
 
         save_message("user", question, user_id=self.user_id)
 
-        answer = await self.ai.generate([
+        answer = await self.generate_response([
             {
                 "role": "system",
                 "content": system_message

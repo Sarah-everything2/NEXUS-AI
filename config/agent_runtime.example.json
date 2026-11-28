@@ -1,0 +1,9 @@
+{
+  "provider": "ollama",
+  "fallback_to_ollama": true,
+  "openai": {
+    "enabled": false,
+    "model": "gpt-5-mini",
+    "max_turns": 2
+  }
+}

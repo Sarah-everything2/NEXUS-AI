@@ -1,4 +1,4 @@
-﻿name: NEXUS AI CI
+name: NEXUS AI CI
 on:
   push:
   pull_request:
@@ -24,4 +24,4 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q core agents integrations tools skills dashboard tests
       - name: Dashboard smoke test
-        run: python -c "from fastapi.testclient import TestClient; from dashboard.app import app; c=TestClient(app); assert c.get('/').status_code == 200; assert c.get('/api/status').status_code == 200"
+        run: python -c "from fastapi.testclient import TestClient; from dashboard.app import app; c=TestClient(app); home=c.get('/'); status=c.get('/api/status'); assert home.status_code == 200, f'Homepage returned {home.status_code}'; assert status.status_code == 401, f'Unauthenticated status endpoint returned {status.status_code}'; assert status.json().get('detail') == 'Authentication required.'; print('PASS: public homepage and protected status endpoint')"

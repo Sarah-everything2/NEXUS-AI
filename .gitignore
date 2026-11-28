@@ -90,4 +90,5 @@ temp/
 # Timestamped local backup files
 *.backup_*
 # Runtime process locks
-.external-miners.lock
+.external-miners.lock\n/config/agent_runtime.jso\n/config/agent_runtime.json\n
+/config/agent_runtime.json
