@@ -1,14 +1,21 @@
-"""Central intelligence cycle for multi-coin mining."""
+"""Central intelligence cycle using configured market providers."""
 
+import json
 import time
+from pathlib import Path
 
-from integrations.xmrig import (
-    network_discovery,
-    price_feed,
-    performance_monitor,
-    hardware_monitor,
-    coin_selector,
-)
+from integrations.xmrig import market_feed, hardware_monitor
+
+ROOT = Path(__file__).resolve().parents[2]
+POLICY = ROOT / "config" / "xmrig.policy.json"
+
+
+def _read_policy():
+    try:
+        data = json.loads(POLICY.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def collect_opportunities():
@@ -20,58 +27,54 @@ def collect_opportunities():
     }
 
     try:
-        network_discovery.discover()
-        networks = network_discovery.get_networks()
-        if not networks:
-            raise RuntimeError("No fresh network data")
-    except Exception as exc:
-        report["errors"].append("network:" + type(exc).__name__)
-        return report
+        refreshed = market_feed.refresh()
+        opportunities = market_feed.get_opportunities()
 
-    try:
-        price_feed.refresh()
-        prices = price_feed.get_prices()
-        if not prices:
-            raise RuntimeError("No fresh coin prices")
-    except Exception as exc:
-        report["errors"].append("prices:" + type(exc).__name__)
-        return report
+        if not opportunities:
+            report["errors"].append(
+                "market: no fresh configured provider opportunities"
+            )
+            report["market"] = refreshed
+            return report
 
-    try:
-        performance = performance_monitor.collect()
+        report["market"] = refreshed
     except Exception as exc:
-        report["errors"].append("performance:" + type(exc).__name__)
+        report["errors"].append("market:" + type(exc).__name__)
         return report
 
     try:
         hardware = hardware_monitor.collect()
         if not hardware.get("telemetry_complete"):
-            raise RuntimeError("Incomplete hardware telemetry")
+            report["errors"].append("hardware: incomplete hardware telemetry")
+            report["hardware"] = hardware
+            return report
     except Exception as exc:
         report["errors"].append("hardware:" + type(exc).__name__)
         return report
 
-    report["opportunities"] = (
-        coin_selector.build_measured_opportunities(
-            networks,
-            prices,
-            performance,
-            hardware,
-        )
-    )
-    report["status"] = (
-        "READY" if report["opportunities"] else "NO_VALID_OPPORTUNITIES"
-    )
+    report["opportunities"] = opportunities
     report["hardware"] = hardware
-    report["performance"] = performance
+    report["status"] = "READY"
     return report
 
 
-def run_cycle(electricity_price_per_kwh=0):
+def run_cycle(electricity_price_per_kwh=None):
     from integrations.xmrig.autopilot import run_cycle as run_autopilot
 
-    intelligence = collect_opportunities()
+    policy = _read_policy()
+    if electricity_price_per_kwh is None:
+        electricity_price_per_kwh = policy.get("electricity_price_per_kwh")
 
+    if (isinstance(electricity_price_per_kwh, bool)
+            or not isinstance(electricity_price_per_kwh, (int, float))
+            or electricity_price_per_kwh < 0):
+        return {
+            "status": "BLOCKED",
+            "reason": "A valid electricity price must be configured.",
+            "execution_authorized": False,
+        }
+
+    intelligence = collect_opportunities()
     if intelligence["status"] != "READY":
         return {
             "status": "BLOCKED",

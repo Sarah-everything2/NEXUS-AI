@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from core.settings import load_settings
@@ -9,6 +9,44 @@ from skills.manager import list_skills
 from tools.manager import get_available_tools
 
 app = FastAPI(title="NEXUS AI Control Centre")
+
+# Dashboard authentication gate.
+from dashboard.auth import get_session_user
+
+_PUBLIC_PATHS = {
+    "/auth/login",
+    "/auth/register",
+    "/manifest.webmanifest",
+    "/service-worker.js",
+    "/pwa-icon.svg",
+}
+
+@app.middleware("http")
+async def require_dashboard_session(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    if request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+
+    token = request.cookies.get("nexus_session")
+    user = get_session_user(token)
+
+    if user is None:
+        path = request.url.path
+
+        if path.startswith("/api/") or path.startswith("/auth/"):
+            return JSONResponse(
+                {"detail": "Authentication required."},
+                status_code=401,
+            )
+
+        return RedirectResponse("/auth/login", status_code=303)
+
+    request.state.current_user = user
+
+    return await call_next(request)
+
 
 # NEXUS PWA PATCH: explicit dashboard-shell assets only.
 from pathlib import Path
@@ -73,13 +111,14 @@ def tools():
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request):
 
     if not request.message.strip():
         raise HTTPException(400, "Message cannot be empty.")
 
     try:
-        agent = NexusAgent()
+        user = http_request.state.current_user
+        agent = NexusAgent(user_id=user["id"], user_role=user["role"])
         answer = await agent.ask(request.message)
 
         return {"reply": answer}
@@ -92,12 +131,13 @@ class SpecialistRequest(BaseModel):
 
 
 @app.post("/api/specialist")
-async def specialist(request: SpecialistRequest):
+async def specialist(request: SpecialistRequest, http_request: Request):
     if request.skill_name not in list_skills():
         raise HTTPException(404, "Unknown skill.")
 
     try:
-        agent = NexusAgent()
+        user = http_request.state.current_user
+        agent = NexusAgent(user_id=user["id"], user_role=user["role"])
         reply = await agent.ask_specialist(
             request.skill_name,
             request.message
@@ -224,8 +264,8 @@ footer {
 
 <header>
 <h1>NEXUS AI</h1>
-<p>Personal AI Agent — Central Control Centre</p>
-<span>● DASHBOARD ONLINE</span>
+<p>Personal AI Agent â€” Central Control Centre</p>
+<span>â— DASHBOARD ONLINE</span>
 </header>
 
 <main>
@@ -437,3 +477,7 @@ from dashboard.workspace import router as workspace_router
 app.include_router(workspace_router)
 from dashboard.research import router as research_router
 app.include_router(research_router)
+
+
+from dashboard.auth_routes import router as auth_router
+app.include_router(auth_router)

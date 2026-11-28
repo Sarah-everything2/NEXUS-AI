@@ -1,6 +1,19 @@
 {
-  "mining_enabled": false,
-  "autonomous_restart_enabled": false,
+  "mining_enabled": true,
+  "autonomous_restart_enabled": true,
+  "autonomous_execution_enabled": true,
+  "stop_when_unprofitable": true,
   "maximum_restarts_per_hour": 3,
-  "minimum_available_ram_gb": 2.5
+  "minimum_available_ram_gb": 1.5,
+  "electricity_price_per_kwh": null,
+  "estimated_power_watts": null,
+  "profitability_limits": {
+    "minimum_net_profit_per_day": 0.0,
+    "maximum_power_watts": 150,
+    "maximum_cpu_percent": 75,
+    "minimum_available_ram_gb": 1.5,
+    "maximum_temperature_c": 80,
+    "maximum_pool_fee_percent": 3.0,
+    "maximum_data_age_seconds": 900
+  }
 }

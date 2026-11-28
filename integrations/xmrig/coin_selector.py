@@ -1,6 +1,7 @@
 """NEXUS multi-coin profitability and resource-aware selection engine."""
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -11,7 +12,7 @@ DEFAULTS = {
     "minimum_net_profit_per_day": 0.0,
     "maximum_power_watts": 150,
     "maximum_cpu_percent": 75,
-    "minimum_available_ram_gb": 2.5,
+    "minimum_available_ram_gb": 1.5,
     "maximum_temperature_c": 80,
     "maximum_pool_fee_percent": 3.0,
     "maximum_data_age_seconds": 900,
@@ -34,6 +35,44 @@ def evaluate_opportunities(
 ):
     """Rank supplied market snapshots. Does not connect to pools or start miners."""
     cfg = {**DEFAULTS, **(settings or {})}
+    numeric_limits = (
+        "minimum_net_profit_per_day",
+        "maximum_power_watts",
+        "maximum_cpu_percent",
+        "minimum_available_ram_gb",
+        "maximum_temperature_c",
+        "maximum_pool_fee_percent",
+        "maximum_data_age_seconds",
+        "minimum_profit_improvement_percent",
+    )
+    for key in numeric_limits:
+        value = cfg.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            return {
+                "status": "BLOCKED",
+                "reason": f"Invalid profitability setting: {key}",
+                "selected": None,
+                "ranked": []
+            }
+
+    if (
+        cfg["minimum_available_ram_gb"] <= 0
+        or cfg["maximum_power_watts"] <= 0
+        or cfg["maximum_data_age_seconds"] <= 0
+        or cfg["maximum_pool_fee_percent"] < 0
+        or cfg["minimum_profit_improvement_percent"] < 0
+    ):
+        return {
+            "status": "BLOCKED",
+            "reason": "Profitability settings contain unsafe limits",
+            "selected": None,
+            "ranked": []
+        }
+
     now = time.time()
 
     if not isinstance(opportunities, list) or not opportunities:
@@ -51,6 +90,13 @@ def evaluate_opportunities(
         temperature = float(hardware["temperature_c"])
     except (KeyError, TypeError, ValueError):
         return {"status": "BLOCKED", "reason": "Incomplete hardware or electricity data",
+                "selected": None, "ranked": []}
+
+    if not all(math.isfinite(x) for x in (
+        electricity, ram, cpu, power, temperature
+    )):
+        return {"status": "BLOCKED",
+                "reason": "Non-finite hardware or electricity telemetry",
                 "selected": None, "ranked": []}
 
     if electricity < 0:
@@ -83,6 +129,13 @@ def evaluate_opportunities(
             watts = float(item.get("estimated_power_watts", power))
             confidence = float(item.get("confidence", 1.0))
 
+            if not all(math.isfinite(x) for x in (
+                revenue, fee, age, watts, confidence
+            )):
+                continue
+
+            if not coin or not algorithm:
+                continue
             if coin not in configured:
                 continue
             if algorithm.lower() != str(configured[coin]["algorithm"]).lower():
@@ -127,28 +180,12 @@ def evaluate_opportunities(
 
     return {
         "status": "RECOMMENDATION_READY",
+        "evaluated_at": now,
         "selected": eligible[0],
         "ranked": ranked,
         "execution_authorized": False,
         "note": "Recommendation only. Central Brain must enforce its operating policy."
     }
-
-
-def should_switch(current_coin, candidate, settings=None):
-    """Avoid unnecessary switching unless improvement clears configured threshold."""
-    cfg = {**DEFAULTS, **(settings or {})}
-
-    if not candidate or not candidate.get("coin"):
-        return False
-
-    if str(current_coin or "").lower() == candidate["coin"].lower():
-        return False
-
-    improvement = candidate.get("estimated_net_profit_per_day")
-    if not isinstance(improvement, (int, float)):
-        return False
-
-    return improvement > 0 and improvement >= cfg["minimum_net_profit_per_day"]
 
 
 def should_switch(current_coin, candidate, settings=None):
@@ -158,12 +195,34 @@ def should_switch(current_coin, candidate, settings=None):
         return False
 
     try:
-        current_net = float(current_coin["net_profit_per_day"])
-        candidate_net = float(candidate["net_profit_per_day"])
+        current_value = current_coin.get(
+            "estimated_net_profit_per_day",
+            current_coin.get("net_profit_per_day")
+        )
+        candidate_value = candidate.get(
+            "estimated_net_profit_per_day",
+            candidate.get("net_profit_per_day")
+        )
+
+        current_net = float(current_value)
+        candidate_net = float(candidate_value)
         minimum_net = float(settings.get("min_net_profit_per_day", 0))
         improvement = float(settings.get("min_profit_improvement_percent", 10))
-        minimum_absolute = float(settings.get("min_absolute_profit_improvement", 0))
-    except (KeyError, TypeError, ValueError):
+        minimum_absolute = float(
+            settings.get("min_absolute_profit_improvement", 0)
+        )
+
+        values = (
+            current_net, candidate_net, minimum_net,
+            improvement, minimum_absolute
+        )
+        if not all(math.isfinite(x) for x in values):
+            return False
+
+        if improvement < 0 or minimum_absolute < 0:
+            return False
+
+    except (KeyError, TypeError, ValueError, OverflowError):
         return False
 
     if candidate_net <= minimum_net or current_net <= 0:
@@ -174,6 +233,7 @@ def should_switch(current_coin, candidate, settings=None):
         minimum_absolute
     )
     return candidate_net - current_net >= required_gain
+
 
 
 def build_measured_opportunities(networks, prices, performance, hardware,
@@ -189,13 +249,23 @@ def build_measured_opportunities(networks, prices, performance, hardware,
         return []
 
     now = time.time()
-    if now - float(performance.get("timestamp", 0)) > 120:
+    try:
+        performance_time = float(performance["timestamp"])
+        hashrate = float(performance.get("hashrate_10s", 0))
+        power = float(hardware.get("estimated_power_watts", 0))
+        pool_fee_percent = float(pool_fee_percent)
+    except (KeyError, TypeError, ValueError, OverflowError):
         return []
 
-    hashrate = float(performance.get("hashrate_10s", 0))
-    power = float(hardware.get("estimated_power_watts", 0))
+    if not all(math.isfinite(x) for x in (
+        performance_time, hashrate, power, pool_fee_percent
+    )):
+        return []
 
-    if hashrate <= 0 or power <= 0:
+    if performance_time > now + 60 or now - performance_time > 120:
+        return []
+
+    if hashrate <= 0 or power <= 0 or pool_fee_percent < 0:
         return []
 
     opportunities = []
@@ -209,6 +279,11 @@ def build_measured_opportunities(networks, prices, performance, hardware,
             target = float(network["block_target_seconds"])
             price = float(price_data["price_usd"])
             price_time = float(price_data["timestamp"])
+
+            if not all(math.isfinite(x) for x in (
+                difficulty, reward, target, price, price_time
+            )):
+                continue
 
             if now - price_time > 900 or price_time > now + 60:
                 continue

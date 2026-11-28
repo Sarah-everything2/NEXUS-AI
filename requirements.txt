@@ -17,3 +17,6 @@ rich
 tweepy
 uvicorn
 yt-dlp
+
+dspy>=3.5,<4
+psutil>=5.9

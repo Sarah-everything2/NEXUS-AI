@@ -1,0 +1,5503 @@
+NEXUS-AI COMPLETE AUTONOMY IMPLEMENTATION AUDIT
+Project: C:\NEXUS-AI
+
+==========================================================================================
+FILE: core/scheduler.py
+==========================================================================================
+
+--- lines 1-1 ---
+import asyncio
+
+--- lines 2-2 ---
+import sqlite3
+
+--- lines 3-3 ---
+from datetime import datetime, timedelta, timezone
+
+--- lines 4-4 ---
+from pathlib import Path
+
+--- lines 6-6 ---
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+--- lines 9-9 ---
+DB_PATH = Path(__file__).resolve().parent.parent / "memory" / "nexus_memory.db"
+
+--- lines 11-11 ---
+scheduler = AsyncIOScheduler(timezone="UTC")
+
+--- lines 14-38 ---
+def initialize():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message TEXT NOT NULL,
+                run_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                repeat TEXT DEFAULT 'once'
+            )
+        """)
+
+        columns = [
+            row[1] for row in connection.execute(
+                "PRAGMA table_info(scheduled_tasks)"
+            )
+        ]
+
+        if "repeat" not in columns:
+            connection.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN repeat TEXT DEFAULT 'once'"
+            )
+
+--- lines 41-79 ---
+def add_reminder(minutes, message, repeat="once"):
+    if minutes < 1:
+        raise ValueError("Reminder must be at least 1 minute away.")
+
+    if not message.strip():
+        raise ValueError("Reminder message cannot be empty.")
+
+    if repeat not in ("once", "hourly", "daily", "weekly"):
+        raise ValueError("Invalid repeat interval.")
+
+    initialize()
+
+    run_at = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+    with sqlite3.connect(DB_PATH) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO scheduled_tasks
+            (message, run_at, status, created_at, repeat)
+            VALUES (?, ?, 'pending', ?, ?)
+            """,
+            (
+                message.strip(),
+                run_at.isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                repeat
+            )
+        )
+
+        task_id = cursor.lastrowid
+
+    schedule_job(task_id, message.strip(), run_at, repeat)
+
+    return {
+        "id": task_id,
+        "message": message.strip(),
+        "run_at": run_at.isoformat(),
+        "repeat": repeat
+    }
+
+--- lines 82-105 ---
+def schedule_job(task_id, message, run_at, repeat):
+    if repeat == "once":
+        scheduler.add_job(
+            deliver_reminder,
+            "date",
+            run_date=run_at,
+            args=[task_id, message],
+            id=str(task_id),
+            replace_existing=True
+        )
+    else:
+        scheduler.add_job(
+            deliver_reminder,
+            "interval",
+            **{
+                "hours": 1 if repeat == "hourly" else 0,
+                "days": 1 if repeat == "daily" else 0,
+                "weeks": 1 if repeat == "weekly" else 0,
+            },
+            start_date=run_at,
+            args=[task_id, message],
+            id=str(task_id),
+            replace_existing=True
+        )
+
+--- lines 108-123 ---
+async def deliver_reminder(task_id, message):
+    print(f"\n\n[ NEXUS REMINDER #{task_id} ]")
+    print(f"  {message}")
+    print("  Reminder delivered.\n")
+
+    with sqlite3.connect(DB_PATH) as connection:
+        row = connection.execute(
+            "SELECT repeat FROM scheduled_tasks WHERE id = ? AND status = 'pending'",
+            (task_id,)
+        ).fetchone()
+
+        if row and row[0] == "once":
+            connection.execute(
+                "UPDATE scheduled_tasks SET status = 'completed' WHERE id = ?",
+                (task_id,)
+            )
+
+--- lines 126-139 ---
+def list_reminders():
+    initialize()
+
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+
+        rows = connection.execute("""
+            SELECT id, message, run_at, status, repeat
+            FROM scheduled_tasks
+            WHERE status = 'pending'
+            ORDER BY run_at
+        """).fetchall()
+
+    return [dict(row) for row in rows]
+
+--- lines 142-158 ---
+def cancel_reminder(task_id):
+    initialize()
+
+    with sqlite3.connect(DB_PATH) as connection:
+        cursor = connection.execute("""
+            UPDATE scheduled_tasks
+            SET status = 'cancelled'
+            WHERE id = ? AND status = 'pending'
+        """, (task_id,))
+
+    if cursor.rowcount:
+        job = scheduler.get_job(str(task_id))
+        if job:
+            scheduler.remove_job(str(task_id))
+        return True
+
+    return False
+
+--- lines 163-189 ---
+async def _run_video_autopilot():
+    import asyncio
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    policy_path = root / "config" / "video_autopilot.policy.json"
+
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+
+        if not policy.get("enabled") or not policy.get("automatic_processing"):
+            return {"status": "DISABLED"}
+
+        from integrations.video_clipping.job_manager import recover_stale_jobs
+        from integrations.video_clipping.video_autopilot import process_queue
+
+        recover_stale_jobs()
+
+        return await asyncio.to_thread(
+            process_queue,
+            max_jobs=policy.get("maximum_jobs_per_cycle", 1)
+        )
+
+    except Exception as exc:
+        print("[VIDEO AUTOPILOT]", type(exc).__name__)
+        return {"status": "ERROR", "error": type(exc).__name__}
+
+--- lines 192-204 ---
+def schedule_video_autopilot(interval_seconds=60):
+    if scheduler.get_job("nexus_video_autopilot"):
+        return
+
+    scheduler.add_job(
+        _run_video_autopilot,
+        "interval",
+        seconds=max(30, int(interval_seconds)),
+        id="nexus_video_autopilot",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True
+    )
+
+--- lines 208-231 ---
+async def _run_video_publisher():
+    import asyncio
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    try:
+        policy = json.loads(
+            (root / "config" / "video_autopilot.policy.json")
+            .read_text(encoding="utf-8-sig")
+        )
+        if policy.get("auto_publish_enabled") is not True:
+            return {"status": "PUBLISHING_DISABLED"}
+
+        from integrations.video_clipping.video_publisher import (
+            process_publication_queue
+        )
+        return await asyncio.to_thread(
+            process_publication_queue,
+            max_jobs=policy.get("maximum_publications_per_cycle", 1)
+        )
+    except Exception as exc:
+        print("[VIDEO PUBLISHER]", type(exc).__name__)
+        return {"status": "ERROR", "error": type(exc).__name__}
+
+--- lines 234-245 ---
+def schedule_video_publisher(interval_seconds=120):
+    if scheduler.get_job("nexus_video_publisher"):
+        return
+    scheduler.add_job(
+        _run_video_publisher,
+        "interval",
+        seconds=max(60, int(interval_seconds)),
+        id="nexus_video_publisher",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True
+    )
+
+--- lines 248-268 ---
+async def _run_video_publication_monitor():
+    """Read-only monitoring of pending TikTok and Instagram publications."""
+    import asyncio
+    try:
+        from integrations.video_clipping.video_publisher import (
+            monitor_pending_publications
+        )
+        results = await asyncio.to_thread(monitor_pending_publications)
+        counts = {"PUBLISHED": 0, "FAILED": 0, "REVIEW_REQUIRED": 0}
+        for item in results or []:
+            status = item.get("status", "REVIEW_REQUIRED")
+            counts[status] = counts.get(status, 0) + 1
+        return {
+            "status": "MONITORED",
+            "checked": len(results or []),
+            "summary": counts,
+            "results": results
+        }
+    except Exception as exc:
+        print("[VIDEO PUBLICATION MONITOR]", type(exc).__name__)
+        return {"status": "ERROR", "error": type(exc).__name__}
+
+--- lines 271-281 ---
+def schedule_video_publication_monitor(interval_seconds=180):
+    """Register read-only publication monitoring; never submits uploads."""
+    scheduler.add_job(
+        _run_video_publication_monitor,
+        "interval",
+        seconds=max(60, int(interval_seconds)),
+        id="nexus_video_publication_monitor",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True
+    )
+
+--- lines 283-309 ---
+def start_scheduler():
+    initialize()
+
+    if not scheduler.running:
+        scheduler.start()
+
+    schedule_mining_autopilot()
+    schedule_video_autopilot()
+    schedule_video_publisher()
+    schedule_video_publication_monitor()
+
+    with sqlite3.connect(DB_PATH) as connection:
+        rows = connection.execute("""
+            SELECT id, message, run_at, repeat
+            FROM scheduled_tasks
+            WHERE status = 'pending'
+        """).fetchall()
+
+    now = datetime.now(timezone.utc)
+
+    for task_id, message, run_at, repeat in rows:
+        scheduled_time = datetime.fromisoformat(run_at)
+
+        if scheduled_time <= now:
+            scheduled_time = now + timedelta(seconds=2)
+
+        schedule_job(task_id, message, scheduled_time, repeat)
+
+--- lines 312-314 ---
+def stop_scheduler():
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+
+--- lines 317-317 ---
+MINING_POLICY = Path(__file__).resolve().parent.parent / "config" / "xmrig.policy.json"
+
+--- lines 318-318 ---
+MINING_MARKET = Path(__file__).resolve().parent.parent / "config" / "xmrig.market.json"
+
+--- lines 319-319 ---
+MINING_HARDWARE = Path(__file__).resolve().parent.parent / "config" / "xmrig.hardware.json"
+
+--- lines 320-320 ---
+MINING_JOB_ID = "nexus_mining_autopilot"
+
+--- lines 323-354 ---
+async def _run_mining_autopilot():
+    """Run the complete multi-coin intelligence cycle under policy control."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    policy_path = root / "config" / "xmrig.policy.json"
+
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        if policy.get("mining_enabled") is not True:
+            return {"status": "DISABLED"}
+
+        electricity_price = policy.get("electricity_price_per_kwh")
+        if electricity_price is None:
+            return {"status": "BLOCKED", "reason": "Electricity price not configured"}
+
+        electricity_price = float(electricity_price)
+        if electricity_price < 0:
+            return {"status": "BLOCKED", "reason": "Invalid electricity price"}
+
+        from integrations.xmrig.mining_intelligence import run_cycle
+        result = await asyncio.to_thread(
+            run_cycle,
+            electricity_price_per_kwh=electricity_price
+        )
+
+        return result
+
+    except Exception as exc:
+        print(f"[MINING AUTOPILOT] Cycle blocked: {type(exc).__name__}")
+        return {"status": "ERROR", "error": type(exc).__name__}
+
+--- lines 355-369 ---
+def schedule_mining_autopilot(interval_seconds=300):
+    """Register mining evaluation with the existing NEXUS scheduler."""
+    interval_seconds = max(60, int(interval_seconds))
+    if scheduler.get_job(MINING_JOB_ID):
+        scheduler.remove_job(MINING_JOB_ID)
+
+    scheduler.add_job(
+        _run_mining_autopilot,
+        "interval",
+        seconds=interval_seconds,
+        id=MINING_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
+
+==========================================================================================
+FILE: core/settings.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+from pathlib import Path
+
+--- lines 4-4 ---
+CONFIG_PATH = Path(__file__).parent.parent / "config" / "settings.json"
+
+--- lines 6-53 ---
+DEFAULT_SETTINGS = {
+    "app_name": "NEXUS AI",
+    "version": "0.2.0",
+
+    "ai_provider": "ollama",
+    "ollama_url": "http://localhost:11434",
+    "model": "",
+
+    "memory_enabled": True,
+
+    "autonomous_mode": False,
+    "require_approval": True,
+    "allow_file_deletion": False,
+    "workspace_only": True,
+
+    "agents": [
+        "research_agent",
+        "trading_agent",
+        "content_agent",
+        "automation_agent",
+        "intelligence_agent"
+    ],
+
+    "enabled_skills": [
+        "file_management",
+        "web_research",
+        "web_scraping",
+        "mining",
+        "trading",
+        "video_clipping",
+        "youtube_automation",
+        "social_media",
+        "airdrop_manager",
+        "ai_to_earn",
+        "osint",
+        "memecoin_intelligence",
+        "nft_intelligence",
+        "stock_intelligence"
+    ],
+
+    "safety": {
+        "require_trade_approval": True,
+        "require_wallet_approval": True,
+        "require_publishing_approval": True,
+        [REDACTED - POSSIBLE SECRET]
+        "protect_credentials": True
+    }
+}
+
+--- lines 56-71 ---
+def load_settings():
+    if not CONFIG_PATH.exists():
+        save_settings(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS.copy()
+
+    with open(CONFIG_PATH, "r", encoding="utf-8-sig") as file:
+        settings = json.load(file)
+
+    merged = {**DEFAULT_SETTINGS, **settings}
+
+    merged["safety"] = {
+        **DEFAULT_SETTINGS["safety"],
+        **settings.get("safety", {})
+    }
+
+    return merged
+
+--- lines 74-78 ---
+def save_settings(settings):
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(CONFIG_PATH, "w", encoding="utf-8-sig") as file:
+        json.dump(settings, file, indent=4)
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    settings = load_settings()
+
+    print("NEXUS AI CENTRAL CONFIGURATION")
+    print("--------------------------------")
+
+    print("Version:", settings["version"])
+    print("AI Provider:", settings["ai_provider"])
+    print("Memory:", settings["memory_enabled"])
+    print("Registered Skills:", len(settings["enabled_skills"]))
+    print("Registered Agents:", len(settings["agents"]))
+    print("Autonomous Mode:", settings["autonomous_mode"])
+    print("Approval Required:", settings["require_approval"])
+
+    print("Status: READY")
+
+==========================================================================================
+FILE: core/cli.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import asyncio
+
+--- lines 3-3 ---
+import os
+
+--- lines 4-4 ---
+import sys
+
+--- lines 5-5 ---
+import platform
+
+--- lines 6-6 ---
+import sqlite3
+
+--- lines 7-7 ---
+import shutil
+
+--- lines 8-8 ---
+from datetime import datetime
+
+--- lines 9-9 ---
+from rich.console import Console
+
+--- lines 10-10 ---
+from rich.panel import Panel
+
+--- lines 11-11 ---
+from rich.table import Table
+
+--- lines 12-12 ---
+from rich.text import Text
+
+--- lines 13-13 ---
+from rich.align import Align
+
+--- lines 14-14 ---
+from rich import box
+
+--- lines 15-15 ---
+from colorama import just_fix_windows_console
+
+--- lines 17-17 ---
+from core.agent import NexusAgent
+
+--- lines 18-18 ---
+from memory.store import get_recent_messages, DB_PATH
+
+--- lines 19-19 ---
+from core.settings import load_settings, save_settings
+
+--- lines 20-20 ---
+from core.scheduler import start_scheduler, stop_scheduler, add_reminder, list_reminders, cancel_reminder
+
+--- lines 21-21 ---
+from integrations.mt5 import session_controller as mt5_session
+
+--- lines 25-459 ---
+class UI:
+
+    console = Console()
+
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    CYAN = "\033[96m"
+    BLUE = "\033[94m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    WHITE = "\033[97m"
+    GRAY = "\033[90m"
+    PURPLE = "\033[95m"
+
+    @staticmethod
+    def backup():
+
+        database = os.path.join("memory", "nexus_memory.db")
+        backup_folder = "backups"
+
+        if not os.path.exists(database):
+            UI.error("Memory database not found.")
+            return
+
+        os.makedirs(backup_folder, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(
+            backup_folder,
+            f"nexus_memory_{timestamp}.db"
+        )
+
+        try:
+            with sqlite3.connect(database) as source:
+                with sqlite3.connect(backup_path) as destination:
+                    source.backup(destination)
+
+            UI.success(f"Backup created: {backup_path}")
+
+        except sqlite3.Error as error:
+            UI.error(f"Backup failed: {error}")
+
+    @staticmethod
+    def clear():
+        os.system("cls" if os.name == "nt" else "clear")
+
+    @staticmethod
+    def line():
+        print(UI.CYAN + "-" * 65 + UI.RESET)
+
+    @staticmethod
+    @staticmethod
+    def success(message):
+        UI.console.print(Panel(
+            Text(str(message), style="bold bright_green"),
+            title="[bold bright_green]? SUCCESS[/]",
+            border_style="bright_green", box=box.ROUNDED, padding=(0, 1)
+        ))
+
+    @staticmethod
+    @staticmethod
+    def error(message):
+        UI.console.print(Panel(
+            Text(str(message), style="bright_white"),
+            title="[bold bright_red]? SYSTEM NOTICE[/]",
+            border_style="bright_red", box=box.ROUNDED, padding=(0, 1)
+        ))
+
+    @staticmethod
+    @staticmethod
+    def info(message):
+        UI.console.print(Text.assemble(
+            ("? ", "bold bright_cyan"), (str(message), "bright_white")
+        ))
+
+    @staticmethod
+    @staticmethod
+    def banner():
+        UI.clear()
+        width = min(max(shutil.get_terminal_size((100, 30)).columns - 2, 64), 112)
+        logo = Text()
+        logo.append("N E X U S", style="bold bright_cyan")
+        logo.append("  A I", style="bold bright_magenta")
+
+        hero = Table.grid(expand=True)
+        hero.add_column(justify="center")
+        hero.add_row(logo)
+        hero.add_row(Text("????????????????????????????????????????????????????", style="bright_blue"))
+        hero.add_row(Text("INTELLIGENCE  /  AUTOMATION  /  CREATION", style="bold bright_white"))
+        hero.add_row(Text("Think deeper. Move faster. Build without limits.", style="italic bright_magenta"))
+        hero.add_row(Text(""))
+        hero.add_row(Text(datetime.now().strftime("%A  |  %d %B %Y  |  %H:%M:%S"), style="dim bright_cyan"))
+
+        UI.console.print()
+        UI.console.print(Panel(
+            Align.center(hero, vertical="middle"),
+            width=width,
+            box=box.DOUBLE,
+            border_style="bright_magenta",
+            padding=(2, 3),
+            title="[bold bright_cyan]? NEXUS AI // CORE SYSTEM ?[/]",
+            subtitle="[bold bright_magenta] SECURE ? MODULAR ? INTELLIGENT [/]"
+        ))
+
+        quick = Table.grid(expand=True, padding=(0, 2))
+        for _ in range(4):
+            quick.add_column(justify="center")
+        quick.add_row(
+            "[bold bright_cyan]/agents[/]\n[dim]Specialists[/]",
+            "[bold bright_magenta]/skills[/]\n[dim]Capabilities[/]",
+            "[bold bright_green]/status[/]\n[dim]System health[/]",
+            "[bold bright_yellow]/help[/]\n[dim]Commands[/]"
+        )
+        UI.console.print(Panel(quick, border_style="bright_blue", box=box.ROUNDED))
+        UI.console.print()
+
+
+
+    @staticmethod
+    @staticmethod
+    def status():
+        settings = load_settings()
+        try:
+            import psutil
+            cpu = f"{psutil.cpu_percent(interval=None):.0f}%"
+            memory = psutil.virtual_memory()
+            ram = f"{memory.percent:.0f}% used | {memory.available / (1024**3):.1f} GB free"
+        except Exception:
+            cpu, ram = "Unavailable", "Unavailable"
+
+        autonomous = bool(settings.get("autonomous_mode"))
+        approval = bool(settings.get("require_approval", True))
+        table = Table(
+            title="[bold bright_white]? LIVE SYSTEM OVERVIEW ?[/]",
+            caption="[dim]NEXUS AI ? LOCAL COMMAND CENTRE[/]",
+            box=box.ROUNDED,
+            border_style="bright_blue",
+            header_style="bold bright_magenta",
+            title_style="bold bright_cyan",
+            expand=True,
+            padding=(0, 1)
+        )
+        table.add_column("SYSTEM COMPONENT", style="bold bright_white")
+        table.add_column("LIVE STATE", style="bright_cyan")
+        table.add_column("INDICATOR", justify="right")
+
+        table.add_row("AI PROVIDER", str(settings.get("ai_provider") or "Not configured").upper(), "[green]? CONFIGURED[/]")
+        table.add_row("AI MODEL", str(settings.get("model") or "Not configured"), "[cyan]? SELECTED[/]")
+        table.add_row("AUTONOMOUS MODE", "ENABLED" if autonomous else "DISABLED",
+                      "[green]? ACTIVE[/]" if autonomous else "[yellow]? STANDBY[/]")
+        table.add_row("ACTION APPROVAL", "REQUIRED" if approval else "NOT REQUIRED",
+                      "[green]? PROTECTED[/]" if approval else "[red]? REVIEW[/]")
+        table.add_row("SPECIALIST AGENTS", str(len(settings.get("agents", []))), "[bright_magenta]? REGISTERED[/]")
+        table.add_row("ENABLED SKILLS", str(len(settings.get("enabled_skills", []))), "[bright_magenta]? AVAILABLE[/]")
+        table.add_row("CPU UTILIZATION", cpu, "[cyan]? TELEMETRY[/]")
+        table.add_row("MEMORY", ram, "[cyan]? TELEMETRY[/]")
+        table.add_row("OPERATING SYSTEM", f"{platform.system()} {platform.release()}", "[green]? DETECTED[/]")
+
+        UI.console.print(table)
+        UI.console.print(Align.center(Text(
+            "ALL SYSTEM ACTIONS REMAIN SUBJECT TO CONFIGURED SAFETY CONTROLS",
+            style="dim bright_cyan"
+        )))
+        UI.console.print()
+
+
+    @staticmethod
+    def diagnostics(agent):
+
+        print(f"\n{UI.CYAN}{UI.BOLD}NEXUS AI SYSTEM DIAGNOSTICS{UI.RESET}")
+        UI.line()
+
+        checks = []
+
+        checks.append(("Python", sys.version.split()[0]))
+        checks.append(("Operating System", platform.system()))
+        checks.append(("AI Model", load_settings().get("model") or "Not configured"))
+        checks.append(("Registered Tools", str(len(agent.available_tools()))))
+        checks.append(("Registered Skills", str(len(agent.available_skills()))))
+
+        for name, value in checks:
+            print(f"{UI.GREEN}OK{UI.RESET}  {name}: {value}")
+
+        database = os.path.join("memory", "nexus_memory.db")
+
+        try:
+            with sqlite3.connect(database) as connection:
+                result = connection.execute("PRAGMA integrity_check").fetchone()[0]
+
+            if result == "ok":
+                print(f"{UI.GREEN}OK{UI.RESET}  Memory Database: Healthy")
+            else:
+                print(f"{UI.RED}ERROR{UI.RESET}  Memory Database: {result}")
+
+        except sqlite3.Error as error:
+            print(f"{UI.RED}ERROR{UI.RESET}  Memory Database: {error}")
+
+        UI.line()
+        print(f"{UI.GREEN}Diagnostics completed.{UI.RESET}\n")
+
+    @staticmethod
+    def memory():
+
+        print(f"\n{UI.CYAN}{UI.BOLD}NEXUS AI MEMORY MANAGER{UI.RESET}")
+        UI.line()
+
+        try:
+            with sqlite3.connect(DB_PATH) as connection:
+
+                conversations = connection.execute(
+                    "SELECT COUNT(*) FROM conversations"
+                ).fetchone()[0]
+
+                research = connection.execute(
+                    "SELECT COUNT(*) FROM research_results"
+                ).fetchone()[0]
+
+            print(f"{UI.GREEN}Conversation records:{UI.RESET} {conversations}")
+            print(f"{UI.GREEN}Research records:{UI.RESET} {research}")
+
+            print(f"\n{UI.YELLOW}RECENT CONVERSATIONS{UI.RESET}")
+
+            history = get_recent_messages(5)
+
+            if not history:
+                print("No conversations saved yet.")
+
+            for message in history:
+                role = message["role"].upper()
+                content = message["content"].replace("\n", " ")
+                print(f"{UI.CYAN}{role}:{UI.RESET} {content[:120]}")
+
+            print(f"\n{UI.GREEN}Memory database: HEALTHY{UI.RESET}")
+
+        except sqlite3.Error as error:
+            UI.error(f"Memory error: {error}")
+
+        UI.line()
+
+    @staticmethod
+    def export():
+
+        export_folder = "exports"
+        os.makedirs(export_folder, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_path = os.path.join(
+            export_folder,
+            f"nexus_export_{timestamp}.json"
+        )
+
+        try:
+            with sqlite3.connect(DB_PATH) as connection:
+                connection.row_factory = sqlite3.Row
+
+                conversations = [
+                    dict(row) for row in connection.execute(
+                        "SELECT * FROM conversations ORDER BY id"
+                    ).fetchall()
+                ]
+
+                research = [
+                    dict(row) for row in connection.execute(
+                        "SELECT * FROM research_results ORDER BY id"
+                    ).fetchall()
+                ]
+
+            data = {
+                "exported_at": datetime.now().isoformat(),
+                "conversations": conversations,
+                "research_results": research
+            }
+
+            with open(export_path, "w", encoding="utf-8") as file:
+                json.dump(data, file, indent=2, ensure_ascii=False)
+
+            UI.success(f"Export completed: {export_path}")
+            UI.info(f"Conversations: {len(conversations)}")
+            UI.info(f"Research records: {len(research)}")
+
+        except (sqlite3.Error, OSError, TypeError) as error:
+            UI.error(f"Export failed: {error}")
+
+    @staticmethod
+    def settings():
+
+        config = load_settings()
+
+        print(f"\n{UI.CYAN}{UI.BOLD}NEXUS AI SETTINGS MANAGER{UI.RESET}")
+        UI.line()
+
+        items = [
+            ("AI Provider", config.get("ai_provider")),
+            ("AI Model", config.get("model") or "Not configured"),
+            ("Memory", "ENABLED" if config.get("memory_enabled") else "DISABLED"),
+            ("Autonomous Mode", "ENABLED" if config.get("autonomous_mode") else "DISABLED"),
+            ("Approval Required", "YES" if config.get("require_approval") else "NO"),
+            ("File Deletion", "ALLOWED" if config.get("allow_file_deletion") else "BLOCKED"),
+            ("Workspace Restriction", "ENABLED" if config.get("workspace_only") else "DISABLED"),
+            ("Registered Agents", len(config.get("agents", []))),
+            ("Enabled Skills", len(config.get("enabled_skills", []))),
+        ]
+
+        for name, value in items:
+            print(f"{UI.GREEN}{name:<25}{UI.RESET} {value}")
+
+        print(f"\n{UI.YELLOW}SAFETY PROTECTION{UI.RESET}")
+
+        for name, enabled in config.get("safety", {}).items():
+            status = "ON" if enabled else "OFF"
+            print(f"  {name}: {status}")
+
+        UI.line()
+
+    @staticmethod
+    def autonomous(mode=None):
+
+        settings = load_settings()
+
+        if mode is None:
+            status = "ENABLED" if settings.get("autonomous_mode") else "DISABLED"
+            UI.info(f"Autonomous Mode: {status}")
+            return
+
+        if mode == "on":
+
+            confirmation = input(
+                "Type ENABLE to activate autonomous mode: "
+            )
+
+            if confirmation != "ENABLE":
+                UI.error("Activation cancelled.")
+                return
+
+            settings["autonomous_mode"] = True
+            settings["require_approval"] = True
+            settings["allow_file_deletion"] = False
+
+            save_settings(settings)
+            UI.success("Autonomous mode enabled. Safety approvals retained.")
+
+        elif mode == "off":
+
+            settings["autonomous_mode"] = False
+            save_settings(settings)
+            UI.success("Autonomous mode disabled.")
+
+        else:
+            UI.error("Usage: /autonomous [on/off]")
+
+    @staticmethod
+    @staticmethod
+    def help():
+        groups = {
+            "01  BRAIN & INTELLIGENCE": [
+                ("/agents", "Explore specialist agents"),
+                ("/skills", "Browse NEXUS capabilities"),
+                ("/tools", "Inspect registered tools"),
+                ("/use <skill> <request>", "Activate a specialist"),
+                ("/research <url>", "Research a webpage"),
+                ("/history", "Conversation history"),
+                ("/memory", "Persistent memory"),
+            ],
+            "02  X GROWTH & CONTENT": [
+                ("/x-growth", "Discover opportunities and create drafts"),
+                ("/x-drafts", "Browse saved drafts"),
+                ("/x-preview <id>", "Preview a draft"),
+                ("/x-publish <id>", "Request human publication approval"),
+                ("/x-analytics", "Review publication analytics"),
+            ],
+            "03  AUTOMATION": [
+                ("/schedule add 10m <message>", "Create a reminder"),
+                ("/schedule list", "View reminders"),
+                ("/schedule cancel <id>", "Cancel a reminder"),
+            ],
+            "04  MT5 BRIDGE": [
+                ("/mt5-server-status", "Inspect bridge status"),
+                ("/mt5-server-start", "Start or reuse the bridge"),
+                ("/mt5-server-restart", "Restart the bridge"),
+                ("/mt5-server-stop", "Stop the bridge"),
+            ],
+            "05  MT5 DEMO TRADING": [
+                ("/trading-plan", "View demo trading plan"),
+                ("/trading-go", "Approve and start a demo session"),
+                ("/trading-status", "Inspect trading session"),
+                ("/trading-stop", "Stop trading"),
+                ("/trading-emergency-stop", "Emergency stop"),
+                ("/trading-emergency-clear", "Request emergency-stop clearance"),
+            ],
+            "06  SYSTEM": [
+                ("/status", "Live system dashboard"),
+                ("/config", "System configuration"),
+                ("/settings", "Settings and safeguards"),
+                ("/autonomous", "View autonomous mode"),
+                ("/autonomous on/off", "Change autonomous mode"),
+                ("/diagnostics", "System health checks"),
+                ("/backup", "Back up memory database"),
+                ("/export", "Export conversations and research"),
+            ],
+            "07  TERMINAL": [
+                ("/help", "Command directory"),
+                ("/clear", "Clear terminal"),
+                ("/exit", "Close NEXUS AI"),
+            ],
+        }
+        UI.console.print()
+        UI.console.print(Panel(
+            Align.center(Text.assemble(
+                ("N E X U S", "bold bright_cyan"),
+                ("  A I", "bold bright_magenta"),
+                ("\nCOMMAND CENTRE", "bold bright_white"),
+                ("\nExplore  ?  Orchestrate  ?  Execute safely", "italic bright_cyan")
+            )),
+            border_style="bright_magenta", box=box.DOUBLE, padding=(1, 2)
+        ))
+        for i, (title, commands) in enumerate(groups.items()):
+            table = Table(
+                box=box.SIMPLE_HEAVY, expand=True,
+                header_style="bold bright_white", padding=(0, 1)
+            )
+            table.add_column("COMMAND", style="bold bright_cyan", no_wrap=True)
+            table.add_column("CAPABILITY", style="white")
+            for command, description in commands:
+                table.add_row(command, description)
+            UI.console.print(Panel(
+                table, title=f"[bold bright_magenta]{title}[/]",
+                border_style="bright_blue" if i % 2 == 0 else "bright_magenta",
+                box=box.ROUNDED, padding=(0, 1)
+            ))
+        UI.console.print(Align.center(
+            Text("? NEXUS AI  ?  INTELLIGENCE AT YOUR COMMAND ?",
+                 style="bold bright_cyan")
+        ))
+        UI.console.print()
+
+--- lines 462-1017 ---
+async def chat():
+
+    agent = NexusAgent()
+    start_scheduler()
+
+    UI.banner()
+    UI.status()
+
+    UI.console.print(Panel(
+        Align.center(Text.assemble(
+            ("? ", "bold bright_green"),
+            ("NEXUS CORE ONLINE", "bold bright_white"),
+            ("\\nType ", "dim"),
+            ("/help", "bold bright_cyan"),
+            (" to explore your command centre.", "dim")
+        )),
+        border_style="bright_green",
+        box=box.ROUNDED,
+        padding=(0, 2)
+    ))
+
+    while True:
+
+        try:
+            prompt = "[bold bright_magenta]? NEXUS[/] [bold bright_cyan]?[/] "
+
+            question = (await asyncio.to_thread(
+                UI.console.input, prompt
+            )).strip()
+
+            if not question:
+                continue
+
+            command = question.lower()
+
+            if command.startswith("/schedule"):
+
+                parts = question.split(maxsplit=4)
+
+                if len(parts) == 1 or parts[1].lower() == "help":
+                    print("\nSCHEDULE COMMANDS")
+                    print("  /schedule add 10m Take a break")
+                    print("  /schedule add 2h Check my project")
+                    print("  /schedule repeat 5m hourly Check my system")
+                    print("  /schedule repeat 1h daily Review my tasks")
+                    print("  /schedule repeat 1d weekly Backup my work")
+                    print("  /schedule list")
+                    print("  /schedule cancel 1\n")
+                    continue
+
+                action = parts[1].lower()
+
+                if action in ("add", "repeat"):
+
+                    try:
+                        if action == "add" and len(parts) == 4:
+                            duration = parts[2].lower()
+                            message = parts[3]
+                            repeat = "once"
+
+                        elif action == "repeat" and len(parts) == 5:
+                            duration = parts[2].lower()
+                            repeat = parts[3].lower()
+                            message = parts[4]
+
+                            if repeat not in ("hourly", "daily", "weekly"):
+                                raise ValueError(
+                                    "Repeat must be hourly, daily, or weekly."
+                                )
+                        else:
+                            raise ValueError("Invalid reminder format. Type /schedule help.")
+
+                        if duration.endswith("m"):
+                            minutes = int(duration[:-1])
+                        elif duration.endswith("h"):
+                            minutes = int(duration[:-1]) * 60
+                        elif duration.endswith("d"):
+                            minutes = int(duration[:-1]) * 1440
+                        else:
+                            raise ValueError("Use m, h, or d.")
+
+                        result = add_reminder(minutes, message, repeat)
+
+                        print(f"\n{UI.GREEN}REMINDER SCHEDULED{UI.RESET}")
+                        print(f"  ID: {result['id']}")
+                        print(f"  Message: {result['message']}")
+                        print(f"  Time (UTC): {result['run_at']}")
+                        print(f"  Repeat: {result['repeat']}\n")
+
+                    except ValueError as error:
+                        UI.error(str(error))
+
+                    continue
+
+                elif action == "list":
+
+                    reminders = list_reminders()
+
+                    print(f"\n{UI.CYAN}{UI.BOLD}SCHEDULED REMINDERS{UI.RESET}")
+
+                    if not reminders:
+                        print("  No pending reminders.")
+                    else:
+                        for reminder in reminders:
+                            print(f"\n  ID: {reminder['id']}")
+                            print(f"  Message: {reminder['message']}")
+                            print(f"  Time (UTC): {reminder['run_at']}")
+                            print(f"  Repeat: {reminder['repeat']}")
+
+                    print()
+                    continue
+
+                elif action == "cancel" and len(parts) >= 3:
+
+                    try:
+                        task_id = int(parts[2])
+
+                        if cancel_reminder(task_id):
+                            print(f"\n{UI.GREEN}Reminder cancelled.{UI.RESET}\n")
+                        else:
+                            UI.error("Pending reminder not found.")
+
+                    except ValueError:
+                        UI.error("Enter a valid reminder ID.")
+
+                    continue
+
+                else:
+                    UI.error("Invalid schedule command. Type /schedule help.")
+                    continue
+
+            if command == "/mt5-server-status":
+                mt5_session.bridge_server_status()
+                continue
+
+            elif command == "/mt5-server-start":
+                try:
+                    mt5_session.start_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API start failed: {error}")
+                continue
+
+            elif command == "/mt5-server-restart":
+                try:
+                    mt5_session.restart_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API restart failed: {error}")
+                continue
+
+            elif command == "/mt5-server-stop":
+                try:
+                    mt5_session.stop_bridge_server()
+                except Exception as error:
+                    UI.error(f"MT5 API stop failed: {error}")
+                continue
+
+            if command == "/trading-plan":
+                mt5_session.show_plan()
+                continue
+
+            elif command == "/trading-go":
+                mt5_session.show_plan()
+                approval = await asyncio.to_thread(
+                    input, "Type GO to approve today's Headway-Demo session: "
+                )
+                if approval.strip() == "GO":
+                    try:
+                        mt5_session.start_session(daily_approval=True)
+                    except Exception as error:
+                        UI.error(f"Trading session not started: {error}")
+                else:
+                    print("Daily trading approval cancelled.")
+                continue
+
+            elif command == "/trading-stop":
+                mt5_session.stop_session()
+                continue
+
+            elif command == "/trading-status":
+                mt5_session.status()
+                continue
+
+            elif command == "/trading-emergency-stop":
+                mt5_session.emergency_stop()
+                continue
+
+            elif command == "/trading-emergency-clear":
+                try:
+                    mt5_session.clear_emergency_stop()
+                except Exception as error:
+                    UI.error(f"Emergency stop clearance blocked: {error}")
+                continue
+
+            if command == "/exit":
+
+                mt5_session.stop_session()
+                stop_scheduler()
+
+                print(f"\n{UI.CYAN}NEXUS AI: Shutting down safely.{UI.RESET}")
+                break
+
+            elif command == "/export":
+
+                UI.export()
+                continue
+
+            elif command == "/memory":
+
+                UI.memory()
+                continue
+
+            elif command == "/backup":
+
+                UI.backup()
+                continue
+
+            elif command == "/diagnostics":
+
+                UI.diagnostics(agent)
+                continue
+
+            # SIGNAL COMMANDER PATCH
+            elif command == "/signal":
+                UI.console.print(Panel(
+                    "Signal Commander commands\\n"
+                    "/signal-dashboard  Dashboard\\n"
+                    "/signal-insights   Insights\\n"
+                    "/signal-memory     Memory\\n"
+                    "/signal-search <query>  Search reports\\n"
+                    "/signal-audit      Registry audit",
+                    title="[bold bright_cyan]SIGNAL COMMANDER[/]",
+                    border_style="bright_cyan"
+                ))
+                continue
+
+            elif command.startswith((
+                "/signal-dashboard", "/signal-insights",
+                "/signal-memory", "/signal-search", "/signal-audit"
+            )):
+                parts = question.split(maxsplit=1)
+                cmd = parts[0].lower()
+                names = {
+                    "/signal-dashboard": "signal_commander_dashboard",
+                    "/signal-insights": "signal_commander_insights",
+                    "/signal-memory": "signal_commander_memory",
+                    "/signal-search": "signal_commander_report_search",
+                    "/signal-audit": "signal_commander_registry_audit",
+                }
+                tool = names[cmd]
+
+                if cmd == "/signal-search" and len(parts) != 2:
+                    UI.error("Usage: /signal-search <query>")
+                    continue
+
+                if tool not in set(agent.available_tools()):
+                    UI.error("Signal Commander tool is not registered: " + tool)
+                    continue
+
+                try:
+                    if cmd == "/signal-search":
+                        result = await agent.use_tool(
+                            tool, query=parts[1].strip()
+                        )
+                    else:
+                        result = await agent.use_tool(tool)
+
+                    UI.console.print(Panel(
+                        str(result),
+                        title="[bold bright_cyan]SIGNAL COMMANDER / "
+                              + cmd[1:].upper() + "[/]",
+                        border_style="bright_cyan"
+                    ))
+                except Exception as error:
+                    UI.error("Signal Commander request failed: " + str(error))
+                continue
+
+            elif command == "/help":
+
+                UI.help()
+                continue
+
+            elif command == "/clear":
+
+                UI.banner()
+                UI.status()
+                continue
+
+            elif command.startswith("/autonomous"):
+
+                parts = question.split(maxsplit=1)
+                mode = parts[1].lower() if len(parts) > 1 else None
+
+                UI.autonomous(mode)
+                continue
+
+            elif command == "/settings":
+
+                UI.settings()
+                continue
+
+            elif command in ("/config", "/status"):
+
+                UI.status()
+                continue
+
+            elif command == "/x-growth":
+
+                print(f"\n{UI.YELLOW}Researching opportunities and generating X drafts...{UI.RESET}")
+
+                result = await agent.use_tool(
+                    "x_growth_run",
+                    content_type="post",
+                    max_drafts=1,
+                    queries_per_category=1,
+                )
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X GROWTH RESULTS{UI.RESET}")
+                print(result)
+                print()
+                continue
+
+            elif command == "/x-drafts":
+
+                result = await agent.use_tool("x_growth_list_drafts")
+
+                print(f"\n{UI.CYAN}{UI.BOLD}SAVED X DRAFTS{UI.RESET}")
+
+                for draft in result:
+                    print(f"\nID: {draft.get('draft_id')}")
+                    print(f"Type: {draft.get('content_type')}")
+                    print(f"Status: {draft.get('status')}")
+                    print(f"Content: {draft.get('content')}")
+
+                if not result:
+                    print("No saved drafts.")
+
+                print()
+                continue
+
+            elif command.startswith("/x-preview"):
+
+                parts = question.split(maxsplit=1)
+
+                if len(parts) != 2:
+                    UI.error("Usage: /x-preview <draft_id>")
+                    continue
+
+                result = await agent.use_tool(
+                    "x_growth_preview_draft",
+                    draft_id=parts[1].strip(),
+                )
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X DRAFT PREVIEW{UI.RESET}")
+                print(result)
+                print()
+                continue
+
+            elif command.startswith("/x-publish"):
+
+                parts = question.split(maxsplit=1)
+
+                if len(parts) != 2:
+                    UI.error("Usage: /x-publish <draft_id>")
+                    continue
+
+                print(f"\n{UI.YELLOW}Publication requires explicit human approval.{UI.RESET}")
+
+                result = await agent.use_tool(
+                    "x_growth_publish_draft",
+                    draft_id=parts[1].strip(),
+                )
+
+                print(result)
+                print()
+                continue
+
+            elif command == "/x-analytics":
+
+                result = await agent.use_tool("x_growth_analytics")
+
+                print(f"\n{UI.CYAN}{UI.BOLD}X GROWTH ANALYTICS{UI.RESET}")
+                print(result)
+                print()
+                continue
+
+            elif command == "/tools":
+                tools = sorted(agent.available_tools())
+                table = Table(title=f"REGISTERED TOOLS  ?  {len(tools)}", box=box.ROUNDED, border_style="bright_cyan", expand=True)
+                table.add_column("#", style="dim", width=5)
+                table.add_column("TOOL", style="bold bright_cyan")
+                table.add_column("STATUS", justify="right")
+                for index, tool in enumerate(tools, 1):
+                    table.add_row(str(index), str(tool), "[green]REGISTERED[/]")
+                UI.console.print(table)
+                continue
+
+            elif command == "/skills":
+                skills = sorted(agent.available_skills())
+                table = Table(title=f"NEXUS CAPABILITY LIBRARY  ?  {len(skills)} SKILLS", box=box.ROUNDED, border_style="bright_magenta", expand=True)
+                table.add_column("#", style="dim", width=5)
+                table.add_column("SKILL", style="bold bright_white")
+                table.add_column("AVAILABILITY", style="green", justify="right")
+                for index, skill in enumerate(skills, 1):
+                    table.add_row(str(index), str(skill), "READY")
+                UI.console.print(table)
+                continue
+
+            elif command == "/agents":
+                from agents.manager import list_agents
+
+                agents = list_agents()
+                UI.console.print(Panel(
+                    Align.center(Text(f"SPECIALIST AGENT NETWORK  ?  {len(agents)} AGENTS", style="bold bright_white")),
+                    border_style="bright_magenta",
+                    box=box.DOUBLE
+                ))
+                for agent_id, details in agents.items():
+                    skills = details.get("skills", [])
+                    card = Table.grid(padding=(0, 1))
+                    card.add_column(style="bold bright_cyan")
+                    card.add_column(style="white")
+                    card.add_row("AGENT", str(details.get("name", agent_id)))
+                    card.add_row("IDENTIFIER", str(agent_id))
+                    card.add_row("CAPABILITIES", ", ".join(map(str, skills)) or "No skills listed")
+                    UI.console.print(Panel(card, border_style="bright_cyan", box=box.ROUNDED))
+                continue
+
+            elif command.startswith("/research"):
+
+                parts = question.split(maxsplit=1)
+
+                if len(parts) < 2:
+                    UI.error("Usage: /research https://example.com")
+                    continue
+
+                print(f"\n{UI.YELLOW}Researching webpage...{UI.RESET}")
+
+                result = await agent.use_tool(
+                    "web_research",
+                    url=parts[1].strip()
+                )
+
+                print(f"\n{UI.CYAN}{UI.BOLD}RESEARCH RESULTS{UI.RESET}")
+
+                if isinstance(result, dict):
+
+                    print(f"{UI.GREEN}Title:{UI.RESET} {result.get('title', 'Unknown')}")
+                    print(f"{UI.GREEN}URL:{UI.RESET} {result.get('url', 'Unknown')}")
+
+                    print(f"\n{UI.BOLD}CONTENT{UI.RESET}")
+                    print(result.get("content", "No content"))
+
+                    print(f"\n{UI.GREEN}Status:{UI.RESET} {result.get('status', 'Unknown')}")
+
+                else:
+                    print(result)
+
+                print()
+                continue
+
+            elif command.startswith("/use "):
+
+                parts = question.split(maxsplit=2)
+
+                if len(parts) < 3:
+                    UI.error("Usage: /use <skill> <your request>")
+                    continue
+
+                skill_name = parts[1].lower()
+                specialist_question = parts[2]
+
+                if skill_name not in agent.available_skills():
+                    UI.error("Unknown skill.")
+                    continue
+
+                with UI.console.status(
+                    f"[bold bright_magenta]Connecting to {skill_name} specialist...",
+                    spinner="dots"
+                ):
+                    answer = await agent.ask_specialist(
+                        skill_name,
+                        specialist_question
+                    )
+
+                UI.console.print(Panel(
+                    str(answer),
+                    title=f"[bold bright_magenta] {skill_name.upper()} SPECIALIST [/]",
+                    subtitle="[italic bright_cyan] NEXUS SPECIALIST NETWORK [/]",
+                    border_style="bright_magenta",
+                    box=box.ROUNDED,
+                    padding=(1, 2)
+                ))
+                continue
+
+            elif command == "/history":
+                history = get_recent_messages(10)
+
+                UI.console.print(Panel(
+                    Align.center(Text(
+                        f"CONVERSATION TIMELINE  ?  {len(history)} MESSAGES",
+                        style="bold bright_white"
+                    )),
+                    border_style="bright_cyan",
+                    box=box.DOUBLE
+                ))
+
+                for index, message in enumerate(history, 1):
+                    role = str(message.get("role", "unknown")).upper()
+                    content = str(message.get("content", ""))
+                    is_user = role == "USER"
+                    UI.console.print(Panel(
+                        content,
+                        title=f"[bold {'bright_green' if is_user else 'bright_cyan'}] {index:02d}  ?  {role} [/]",
+                        border_style="bright_green" if is_user else "bright_cyan",
+                        box=box.ROUNDED,
+                        padding=(1, 2)
+                    ))
+                continue
+
+            # NORMAL AI CHAT
+
+            with UI.console.status(
+                "[bold bright_cyan]NEXUS is thinking...",
+                spinner="dots"
+            ):
+                answer = await agent.ask(question)
+
+            UI.console.print(Panel(
+                str(answer),
+                title="[bold bright_cyan]? NEXUS INTELLIGENCE RESPONSE ?[/]",
+                subtitle="[italic bright_magenta] THINK  ?  REASON  ?  CREATE [/]",
+                border_style="bright_cyan",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            ))
+            UI.console.print()
+
+        except KeyboardInterrupt:
+            UI.console.print(Panel(
+                Align.center(Text("SESSION INTERRUPTED  ?  RETURNING SAFELY", style="bold yellow")),
+                border_style="yellow",
+                box=box.ROUNDED
+            ))
+            mt5_session.stop_session()
+            stop_scheduler()
+            break
+
+        except Exception as error:
+            UI.console.print(Panel(
+                Text(str(error), style="white"),
+                title="[bold red] NEXUS SYSTEM ERROR [/]",
+                subtitle="[dim] The session remains available unless a safety control stopped it. [/]",
+                border_style="red",
+                box=box.ROUNDED,
+                padding=(1, 2)
+            ))
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    asyncio.run(chat())
+
+==========================================================================================
+FILE: core/agent.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+from core.settings import load_settings
+
+--- lines 3-3 ---
+from brain.ollama_client import OllamaClient
+
+--- lines 4-4 ---
+from memory.store import save_message, get_recent_messages
+
+--- lines 5-5 ---
+from tools.manager import execute_tool, get_available_tools, get_mcp_servers
+
+--- lines 6-6 ---
+from tools.approval import approve_tool_call
+
+--- lines 7-7 ---
+from skills.manager import list_skills, read_skill
+
+--- lines 8-8 ---
+from agents.dispatcher import dispatch_request
+
+--- lines 9-9 ---
+from core.toolcalling.selector import ToolSelector
+
+--- lines 10-10 ---
+from integrations.youtube.upload import load_config
+
+--- lines 11-413 ---
+class NexusAgent:
+
+    def __init__(self):
+        self.ai = OllamaClient()
+        self.tool_selector = ToolSelector(self.ai)
+    async def run_autonomous_task(self, question):
+
+        settings = load_settings()
+
+        if not settings.get("autonomous_mode", False):
+            return None
+
+        safe_tools = [
+            "list_files",
+            "read_file",
+            "web_research",
+            "trend_discovery",
+            "signal_commander_discover", "signal_commander_dashboard", "signal_commander_memory", "signal_commander_insights", "signal_commander_report_search", "signal_commander_registry_audit",
+            "xmrig_status",
+            "xmrig_health",
+            "xmrig_logs",
+            "xmrig_recovery_check",
+            "video_probe",
+            "video_transcribe",
+            "video_detect_highlights",
+            "video_extract_clip",
+            "video_create_vertical_short",
+            "video_create_subtitles",
+            "video_burn_subtitles",
+            "youtube_status",
+            "youtube_channel",
+            "youtube_controls",
+    "x_status",
+    "x_account",
+    "x_analytics",
+    "x_search_trends",
+    "x_account_timeline",
+            "mt5_get_account",
+            "mt5_get_price",
+            "mt5_get_positions",
+            "mt5_get_history",
+            "mt5_get_strategy_signal",
+        ]
+
+        youtube_config = load_config()
+        if youtube_config.get("allow_autonomous_private_uploads", False):
+            safe_tools.append("youtube_upload_autonomous")
+
+        safe_tools += [
+            tool for tool in get_available_tools()
+            if tool.startswith("github_")
+        ]
+
+        prompt = f"""
+You are the NEXUS AI autonomous task planner.
+
+Available safe tools:
+{safe_tools}
+
+User request:
+{question}
+
+Rules:
+- Select tools only when necessary.
+- Use no more than 3 actions.
+- Only use tools from the available safe tools list.
+- Never select write_file or delete_file.
+- Signal Commander is research-only: it discovers and ranks opportunities, verifies available evidence and saves reports. It must never publish, trade, mine or execute external actions.
+- Never perform financial transactions.
+- Never invent tool names.
+- If no tool is needed, return an empty actions list.
+
+Return ONLY valid JSON in this format:
+{{
+    "actions": [
+        {{
+            "tool": "tool_name",
+            "arguments": {{}}
+        }}
+    ]
+}}
+"""
+
+        response = await self.ai.generate([
+            {"role": "user", "content": prompt}
+        ])
+
+        try:
+            plan = json.loads(response)
+        except json.JSONDecodeError:
+            return None
+
+        actions = plan.get("actions", [])
+
+        if not isinstance(actions, list):
+            return None
+
+        results = []
+        executed_tools = set()
+
+        for action in actions[:3]:
+
+            if not isinstance(action, dict):
+                continue
+
+            tool_name = action.get("tool")
+            arguments = action.get("arguments", {})
+
+            if tool_name not in safe_tools:
+                continue
+
+            if not isinstance(arguments, dict):
+                continue
+
+            tool_key = (tool_name, json.dumps(arguments, sort_keys=True))
+
+            if tool_key in executed_tools:
+                continue
+
+            executed_tools.add(tool_key)
+
+            result = await self.use_tool(
+                tool_name,
+                _autonomous=True,
+                **arguments
+            )
+
+            results.append({
+                "tool": tool_name,
+                "result": str(result)
+            })
+
+        return results
+
+    def build_system_context(self):
+
+        skills = list_skills()
+        skill_instructions = []
+
+        for skill in skills:
+            try:
+                instructions = read_skill(skill)
+                skill_instructions.append(
+                    f"\n--- {skill.upper()} SKILL ---\n{instructions}"
+                )
+            except (ValueError, PermissionError):
+                continue
+
+        available_tools = get_available_tools()
+        mcp_servers = get_mcp_servers()
+
+        return f"""
+You are NEXUS AI, a modular personal AI assistant.
+
+YOUR RESPONSIBILITIES:
+- Help the user operate all registered NEXUS AI skills.
+- Understand requests and explain how to complete tasks.
+- Be honest about available capabilities.
+- Never claim an action was completed unless it actually was.
+- Protect the user's files, accounts and financial assets.
+- Require approval for consequential actions.
+
+REGISTERED SKILLS:
+{", ".join(skills)}
+
+AVAILABLE TOOLS:
+{", ".join(available_tools)}`n`nREGISTERED MCP SERVERS:`n{mcp_servers}
+
+IMPORTANT:
+A registered skill is an instruction module, not necessarily
+an active integration. Do not pretend unavailable integrations
+or services are connected.
+
+SKILL INSTRUCTIONS:
+{"".join(skill_instructions)}
+
+SAFETY:
+[REDACTED - POSSIBLE SECRET]
+Never execute financial transactions without approval.
+Never bypass security restrictions.
+"""
+
+    async def ask(self, question):
+
+        if not question.strip():
+            raise ValueError("Question cannot be empty.")
+
+        save_message("user", question)
+
+        # Run autonomous tasks when enabled.
+        autonomous_results = await self.run_autonomous_task(question)
+
+        # Use conversational tool selection only when autonomous
+        # execution has not already handled the request.
+        tool_results = []
+
+        if not autonomous_results:
+            actions = await self.tool_selector.select_tools(question)
+
+            for action in actions:
+
+                tool_name = action.get("tool")
+                arguments = action.get("arguments", {})
+
+                # Validate the selected tool again before execution.
+                if tool_name not in get_available_tools():
+                    continue
+
+                if not isinstance(arguments, dict):
+                    continue
+
+                try:
+                    result = await self.use_tool(
+                        tool_name,
+                        **arguments
+                    )
+                except Exception as exc:
+                    result = f"Tool execution failed: {exc}"
+
+                tool_results.append({
+                    "tool": tool_name,
+                    "result": result
+                })
+
+                # Format verified MT5 results.
+        if tool_results and any(
+            item["tool"].startswith("mt5_")
+            for item in tool_results
+        ):
+            formatted_results = []
+
+            for item in tool_results:
+                tool_name = item["tool"]
+                result = item["result"]
+
+                if (
+                    tool_name == "mt5_get_account"
+                    and isinstance(result, dict)
+                    and result.get("status") == "SUCCESS"
+                ):
+                    data = result.get("data", {})
+
+                    balance = data.get("balance", "N/A")
+                    equity = data.get("equity", "N/A")
+
+                    if isinstance(balance, (int, float)):
+                        balance = f"{balance:,.2f}"
+
+                    if isinstance(equity, (int, float)):
+                        equity = f"{equity:,.2f}"
+
+                    formatted_results.append(
+                        "NEXUS AI Ã¢â‚¬â€ MT5 ACCOUNT\n"
+                        "------------------------------\n"
+                        f"Server: {data.get('server', 'N/A')}\n"
+                        f"Balance: {balance} {data.get('currency', '')}\n"
+                        f"Equity: {equity} {data.get('currency', '')}\n"
+                        f"Currency: {data.get('currency', 'N/A')}\n"
+                        "Status: CONNECTED\n"
+                        "Execution: READ ONLY"
+                    )
+                else:
+                    formatted_results.append(
+                        f"{tool_name}:\n"
+                        f"{json.dumps(result, indent=2, default=str) if isinstance(result, (dict, list)) else result}"
+                    )
+
+            answer = "\n\n".join(formatted_results)
+
+            save_message("assistant", answer)
+
+            return answer
+
+        history = get_recent_messages(limit=20)
+
+        messages = [
+            {
+                "role": "system",
+                "content": self.build_system_context()
+            }
+        ] + history
+
+        if autonomous_results:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "AUTONOMOUS EXECUTION RESULTS:\n"
+                    f"{autonomous_results}\n"
+                    "Explain these actual results to the user. "
+                    "Do not claim anything else was executed."
+                )
+            })
+
+        if tool_results:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "CONVERSATIONAL TOOL EXECUTION RESULTS:\n"
+                    f"{json.dumps(tool_results, indent=2)}\n"
+                    "Explain these actual results accurately. "
+                    "Never invent tool results or claim an action "
+                    "succeeded if it failed or was cancelled."
+                )
+            })
+
+        answer = await self.ai.generate(messages)
+
+        save_message("assistant", answer)
+
+        return answer
+
+    async def run_mining_cycle(self, opportunities=None, electricity_price_per_kwh=None, hardware=None):
+        """Central Brain interface for policy-controlled mining decisions."""
+        from integrations.xmrig import autopilot
+
+        if opportunities is None or hardware is None or electricity_price_per_kwh is None:
+            return {
+                "status": "INPUT_REQUIRED",
+                "required": ["market opportunities", "electricity price", "hardware telemetry"]
+            }
+
+        return autopilot.run_cycle(
+            opportunities=opportunities,
+            electricity_price_per_kwh=electricity_price_per_kwh,
+            hardware=hardware
+        )
+
+    async def ask_specialist(self, skill_name, question):
+
+        if not question.strip():
+            raise ValueError("Question cannot be empty.")
+
+        task = dispatch_request(skill_name, question)
+
+        system_message = f"""
+You are {task['agent_name']} in NEXUS AI.
+
+Your assigned skill is: {skill_name}
+
+Follow these skill instructions:
+{task['instructions']}
+
+User request:
+{question}
+
+Be accurate. Never claim to have performed actions
+that you have not actually performed.
+Respect all NEXUS AI safety rules.
+"""
+
+        save_message("user", question)
+
+        answer = await self.ai.generate([
+            {
+                "role": "system",
+                "content": system_message
+            },
+            {
+                "role": "user",
+                "content": question
+            }
+        ])
+
+        save_message("assistant", answer)
+
+        return answer
+    def available_tools(self):
+        return get_available_tools()
+
+    def available_skills(self):
+        return list_skills()
+
+    def load_skill(self, skill_name):
+        return read_skill(skill_name)
+
+    async def use_tool(self, tool_name, _autonomous=False, **kwargs):
+
+        # MCP tools enforce their own approval inside tools.manager.
+        if tool_name.startswith("mcp_"):
+            return await execute_tool(tool_name, **kwargs)
+
+        if tool_name == "youtube_upload_autonomous":
+            if not _autonomous:
+                return "Autonomous upload tool is restricted to the autonomous task runner."
+            return await execute_tool(tool_name, **kwargs)
+
+        if tool_name == "youtube_upload":
+            return await execute_tool(tool_name, **kwargs)
+
+        # X publishing tools enforce approval internally.
+        # X Growth publication delegates to those same protected wrappers.
+
+        if tool_name in ("x_post", "x_thread", "x_growth_publish_draft"):
+
+            return await execute_tool(tool_name, **kwargs)
+
+
+        approved = approve_tool_call(tool_name, kwargs)
+
+        if not approved:
+            return "Action cancelled. Permission denied."
+
+        return await execute_tool(tool_name, **kwargs)
+
+--- lines 420-420 ---
+from core.settings import load_settings
+
+==========================================================================================
+FILE: agents/dispatcher.py
+==========================================================================================
+
+--- lines 1-1 ---
+from agents.router import route_request
+
+--- lines 2-2 ---
+from agents.task_store import save_tasks
+
+--- lines 3-3 ---
+from skills.manager import read_skill
+
+--- lines 6-22 ---
+def dispatch_request(skill_name, user_request):
+    if not isinstance(skill_name, str) or not skill_name.strip():
+        raise ValueError("A valid skill name is required.")
+    if not isinstance(user_request, str) or not user_request.strip():
+        raise ValueError("A valid user request is required.")
+
+    skill_name = skill_name.strip()
+    route = route_request(skill_name)
+
+    return {
+        "agent_id": route["agent_id"],
+        "agent_name": route["agent"],
+        "skill": skill_name,
+        "user_request": user_request.strip(),
+        "instructions": read_skill(skill_name),
+        "status": "READY",
+    }
+
+--- lines 25-57 ---
+def dispatch_opportunity(opportunity):
+    if not isinstance(opportunity, dict):
+        raise ValueError("Opportunity must be a dictionary.")
+
+    title = str(opportunity.get("title") or opportunity.get("name") or "").strip()
+    if not title:
+        raise ValueError("Opportunity must contain a title or name.")
+
+    evidence = opportunity.get("evidence") or opportunity.get("description") or opportunity.get("body") or ""
+    source = opportunity.get("url") or opportunity.get("href") or ""
+    category = opportunity.get("category") or opportunity.get("niche") or "Unclassified"
+    score = opportunity.get("score")
+
+    request = (
+        "Prepare an evidence-based intelligence brief for this discovered opportunity.\n"
+        f"Title: {title[:300]}\n"
+        f"Category: {str(category)[:120]}\n"
+        f"Evidence: {str(evidence)[:4000]}\n"
+        f"Source: {str(source)[:1000]}\n"
+        f"Opportunity score: {score}\n\n"
+        "Assess relevance, evidence quality, risks, uncertainties, timing and "
+        "practical next research steps. Do not invent missing evidence."
+    )
+
+    task = dispatch_request("signal_commander", request)
+    task["opportunity"] = {
+        "title": title[:300],
+        "category": str(category)[:120],
+        "source": str(source)[:1000],
+        "score": score,
+    }
+    task["handoff_type"] = "INTELLIGENCE_RESEARCH"
+    return task
+
+--- lines 60-89 ---
+def dispatch_opportunities(opportunities, max_tasks=10):
+    if not isinstance(opportunities, (list, tuple)):
+        raise ValueError("Opportunities must be a list.")
+    if not isinstance(max_tasks, int) or isinstance(max_tasks, bool) or not 1 <= max_tasks <= 20:
+        raise ValueError("max_tasks must be between 1 and 20.")
+
+    tasks = []
+    errors = []
+
+    for index, opportunity in enumerate(opportunities[:max_tasks]):
+        try:
+            tasks.append(dispatch_opportunity(opportunity))
+        except (ValueError, TypeError) as exc:
+            errors.append({"index": index, "error": str(exc)})
+
+    archive = save_tasks(tasks) if tasks else {
+        "status": "EMPTY",
+        "tasks_saved": 0,
+        "tasks": [],
+    }
+
+    return {
+        "status": "READY" if tasks else "NO_VALID_TASKS",
+        "tasks_created": len(tasks),
+        "tasks": archive.get("tasks", tasks),
+        "errors": errors,
+        "archive_status": archive["status"],
+        "tasks_archived": archive["tasks_saved"],
+        "execution_started": False,
+    }
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    result = dispatch_request(
+        "trading",
+        "Analyse the current market conditions."
+    )
+    print("NEXUS AI AGENT DISPATCHER")
+    print("-------------------------")
+    print("Agent:", result["agent_name"])
+    print("Skill:", result["skill"])
+    print("Status:", result["status"])
+
+==========================================================================================
+FILE: agents/manager.py
+==========================================================================================
+
+--- lines 1-1 ---
+from core.settings import load_settings
+
+--- lines 4-38 ---
+AGENTS = {
+    "research_agent": {
+        "name": "Research Agent",
+        "skills": ["osint", "web_research", "web_scraping"]
+    },
+
+    "trading_agent": {
+        "name": "Trading Agent",
+        "skills": ["trading", "stock_intelligence"]
+    },
+
+    "content_agent": {
+        "name": "Content Agent",
+        "skills": ["video_clipping", "youtube_automation"]
+    },
+
+    "automation_agent": {
+        "name": "Automation Agent",
+        "skills": [
+            "social_media",
+            "airdrop_manager",
+            "ai_to_earn"
+        ]
+    },
+
+    "intelligence_agent": {
+        "name": "Intelligence Agent",
+        "skills": [
+            "mining",
+            "memecoin_intelligence",
+            "nft_intelligence",
+            "signal_commander"
+        ]
+    }
+}
+
+--- lines 41-49 ---
+def list_agents():
+    settings = load_settings()
+    enabled = settings.get("agents", [])
+
+    return {
+        agent_id: details
+        for agent_id, details in AGENTS.items()
+        if agent_id in enabled
+    }
+
+--- lines 52-58 ---
+def get_agent(agent_id):
+    agents = list_agents()
+
+    if agent_id not in agents:
+        raise ValueError(f"Unknown or disabled agent: {agent_id}")
+
+    return agents[agent_id]
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    print("NEXUS AI MULTI-AGENT MANAGER")
+    print("----------------------------")
+
+    for agent_id, details in list_agents().items():
+        print(f"\n{details['name']}")
+        print("ID:", agent_id)
+        print("Skills:", ", ".join(details["skills"]))
+
+    print("\nRegistered agents:", len(list_agents()))
+    print("Status: READY")
+
+==========================================================================================
+FILE: agents/router.py
+==========================================================================================
+
+--- lines 1-1 ---
+from agents.manager import get_agent, list_agents
+
+--- lines 4-17 ---
+def route_request(skill_name):
+
+    for agent_id, details in list_agents().items():
+
+        if skill_name in details["skills"]:
+            return {
+                "agent_id": agent_id,
+                "agent": details["name"],
+                "skill": skill_name
+            }
+
+    raise ValueError(
+        f"No registered agent supports skill: {skill_name}"
+    )
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+
+    print("NEXUS AI AGENT ROUTER")
+    print("---------------------")
+
+    test_skills = [
+        "osint",
+        "trading",
+        "video_clipping",
+        "airdrop_manager",
+        "memecoin_intelligence"
+    ]
+
+    for skill in test_skills:
+        print(skill, "->", route_request(skill))
+
+    print("Status: READY")
+
+==========================================================================================
+FILE: agents/task_store.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import hashlib
+
+--- lines 3-3 ---
+from pathlib import Path
+
+--- lines 4-4 ---
+from datetime import datetime, timezone
+
+--- lines 6-6 ---
+TASK_FILE = Path(__file__).resolve().parents[1] / "data" / "signal_commander" / "agent_tasks.json"
+
+--- lines 7-7 ---
+VALID_STATUSES = {"PREPARED", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED"}
+
+--- lines 10-11 ---
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+--- lines 14-24 ---
+def _load():
+    TASK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not TASK_FILE.exists():
+        return {"tasks": {}}
+    try:
+        data = json.loads(TASK_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("tasks"), dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"tasks": {}}
+
+--- lines 27-34 ---
+def _save(data):
+    TASK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp = TASK_FILE.with_suffix(".tmp")
+    temp.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    temp.replace(TASK_FILE)
+
+--- lines 37-45 ---
+def _task_id(task):
+    opportunity = task.get("opportunity", {})
+    identity = (
+        str(opportunity.get("source", "")).strip().lower()
+        or str(opportunity.get("title", "")).strip().lower()
+    )
+    if not identity:
+        raise ValueError("Task requires an opportunity title or source.")
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+--- lines 48-83 ---
+def save_tasks(tasks):
+    if not isinstance(tasks, (list, tuple)):
+        raise ValueError("Tasks must be a list.")
+
+    data = _load()
+    saved = []
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+
+        task_id = _task_id(task)
+        now = _now()
+        existing = data["tasks"].get(task_id)
+
+        if existing:
+            existing["last_seen"] = now
+            existing["discovery_count"] = existing.get("discovery_count", 1) + 1
+            saved.append(existing)
+            continue
+
+        record = dict(task)
+        record.update({
+            "task_id": task_id,
+            "status": "PREPARED",
+            "created_at": now,
+            "updated_at": now,
+            "last_seen": now,
+            "discovery_count": 1,
+            "execution_started": False,
+        })
+        data["tasks"][task_id] = record
+        saved.append(record)
+
+    _save(data)
+    return {"status": "SAVED", "tasks_saved": len(saved), "tasks": saved}
+
+--- lines 86-97 ---
+def get_tasks(status=None, limit=100):
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise ValueError("limit must be between 1 and 1000.")
+    if status is not None and status not in VALID_STATUSES:
+        raise ValueError("Invalid task status.")
+
+    tasks = list(_load()["tasks"].values())
+    if status:
+        tasks = [task for task in tasks if task.get("status") == status]
+
+    tasks.sort(key=lambda task: task.get("updated_at", ""), reverse=True)
+    return {"status": "SUCCESS", "count": len(tasks[:limit]), "tasks": tasks[:limit]}
+
+--- lines 100-115 ---
+def update_task(task_id, status):
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("A task ID is required.")
+    if status not in VALID_STATUSES:
+        raise ValueError("Invalid task status.")
+
+    data = _load()
+    task = data["tasks"].get(task_id)
+    if not task:
+        return {"status": "NOT_FOUND", "task_id": task_id}
+
+    task["status"] = status
+    task["updated_at"] = _now()
+    _save(data)
+
+    return {"status": "UPDATED", "task": task}
+
+==========================================================================================
+FILE: tools/approval.py
+==========================================================================================
+
+--- lines 1-1 ---
+from core.settings import load_settings
+
+--- lines 5-25 ---
+AUTONOMOUS_SAFE_TOOLS = {
+    "list_files",
+    "read_file",
+    "web_research",
+    "trend_discovery",
+    "video_probe",
+    "video_transcribe",
+    "video_detect_highlights",
+    "video_extract_clip",
+    "video_create_vertical_short",
+    "video_create_subtitles",
+    "video_burn_subtitles",
+    "youtube_status",
+    "youtube_channel",
+    "youtube_controls",
+    "x_status",
+    "x_account",
+    "x_analytics",
+    "x_search_trends",
+    "x_account_timeline",
+}
+
+--- lines 28-66 ---
+def approve_tool_call(tool_name, arguments):
+
+    settings = load_settings()
+
+    print("\nNEXUS AI PERMISSION MANAGER")
+    print("---------------------------")
+    print("Requested tool:", tool_name)
+
+    # File deletion always requires explicit permission.
+    if tool_name == "delete_file":
+
+        if not settings.get("allow_file_deletion", False):
+            print("BLOCKED: File deletion is disabled.")
+            return False
+
+        confirmation = input(
+            "Type DELETE to confirm file deletion: "
+        )
+
+        return confirmation == "DELETE"
+
+    # Safe tools can operate autonomously.
+    if settings.get("autonomous_mode", False):
+
+        if (
+            tool_name in AUTONOMOUS_SAFE_TOOLS
+            or tool_name.startswith("github_")
+        ):
+            print("AUTONOMOUS MODE: Safe operation approved.")
+            return True
+
+    # All other operations require explicit approval.
+    print("Arguments:", arguments)
+
+    confirmation = input(
+        "Allow this action? Type YES to confirm: "
+    )
+
+    return confirmation == "YES"
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    print("NEXUS AI PERMISSION MANAGER")
+    print("Status: READY")
+
+==========================================================================================
+FILE: tools/manager.py
+==========================================================================================
+
+--- lines 1-1 ---
+import inspect
+
+--- lines 2-2 ---
+import inspect
+
+--- lines 4-4 ---
+from tools.filesystem import list_files, read_file, write_file, delete_file
+
+--- lines 5-5 ---
+from tools.web_research import fetch_page
+
+--- lines 6-6 ---
+from tools.trend_discovery import discover_trends
+
+--- lines 7-7 ---
+from tools.mcp_manager import MCPManager
+
+--- lines 8-8 ---
+from tools.github_tools import github_call, ALLOWED_TOOLS
+
+--- lines 9-9 ---
+from tools.approval import approve_tool_call
+
+--- lines 11-17 ---
+from integrations.mt5.client import (
+    get_account as mt5_get_account,
+    get_price as mt5_get_price,
+    get_positions as mt5_get_positions,
+    get_history as mt5_get_history,
+    get_strategy_signal as mt5_get_strategy_signal,
+)
+
+--- lines 18-21 ---
+from integrations.openmausbot.client import (
+    list_tools as mcp_list_tools,
+    call_tool as mcp_call_tool,
+)
+
+--- lines 24-31 ---
+TOOLS = {
+    "list_files": list_files,
+    "read_file": read_file,
+    "write_file": write_file,
+    "delete_file": delete_file,
+    "web_research": fetch_page,
+    "trend_discovery": discover_trends,
+}
+
+--- lines 41-44 ---
+def make_github_executor(mcp_tool_name):
+    async def execute(**kwargs):
+        return await github_call(mcp_tool_name, kwargs)
+    return execute
+
+--- lines 51-73 ---
+async def execute_mcp_list_tools(server_name, **kwargs):
+    approved = approve_tool_call(
+        "mcp_list_tools",
+        {"server": server_name}
+    )
+
+    if not approved:
+        return "MCP action cancelled. Permission denied."
+
+    manager = MCPManager()
+    validation = manager.validate_server(server_name, approved=True)
+
+    if validation["status"] != "VALID":
+        raise PermissionError(validation["message"])
+
+    config = manager.config["mcpServers"][server_name]
+
+    transport_config = {
+        **config,
+        "type": "http" if validation["type"] == "HTTP" else "stdio",
+    }
+
+    return await mcp_list_tools(transport_config)
+
+--- lines 76-118 ---
+async def execute_mcp_call_tool(
+    server_name,
+    tool_name,
+    arguments=None,
+    **kwargs
+):
+    if not isinstance(tool_name, str) or not tool_name:
+        raise ValueError("A valid MCP tool name is required.")
+
+    if arguments is not None and not isinstance(arguments, dict):
+        raise ValueError("MCP arguments must be a dictionary.")
+
+    approved = approve_tool_call(
+        "mcp_call_tool",
+        {
+            "server": server_name,
+            "tool": tool_name,
+            "argument_keys": list((arguments or {}).keys()),
+        }
+    )
+
+    if not approved:
+        return "MCP action cancelled. Permission denied."
+
+    manager = MCPManager()
+    validation = manager.validate_server(server_name, approved=True)
+
+    if validation["status"] != "VALID":
+        raise PermissionError(validation["message"])
+
+    config = manager.config["mcpServers"][server_name]
+
+    transport_config = {
+        **config,
+        "type": "http" if validation["type"] == "HTTP" else "stdio",
+    }
+
+    return await mcp_call_tool(
+        transport_config,
+        tool_name,
+        arguments or {},
+        approved=True,
+    )
+
+--- lines 121-121 ---
+TOOLS["mcp_list_tools"] = execute_mcp_list_tools
+
+--- lines 122-122 ---
+TOOLS["mcp_call_tool"] = execute_mcp_call_tool
+
+--- lines 126-129 ---
+from tools.xmrig_tools import (
+    xmrig_status, xmrig_health, xmrig_logs,
+    xmrig_configure_pool, xmrig_start, xmrig_stop, xmrig_recovery_check,
+)
+
+--- lines 141-145 ---
+from integrations.video_clipping.engine import (
+    probe_video,
+    extract_clip,
+    create_vertical_short,
+)
+
+--- lines 154-154 ---
+from integrations.video_clipping.engine import create_subtitles
+
+--- lines 156-156 ---
+TOOLS["video_create_subtitles"] = create_subtitles
+
+--- lines 159-159 ---
+from integrations.video_clipping.engine import burn_subtitles
+
+--- lines 161-161 ---
+TOOLS["video_burn_subtitles"] = burn_subtitles
+
+--- lines 162-162 ---
+from integrations.video_clipping.engine import detect_highlights
+
+--- lines 164-164 ---
+TOOLS["video_detect_highlights"] = detect_highlights
+
+--- lines 167-168 ---
+def get_available_tools():
+    return list(TOOLS.keys())
+
+--- lines 171-172 ---
+def get_mcp_servers():
+    return MCPManager().list_servers()
+
+--- lines 175-184 ---
+async def execute_tool(registered_tool_name, **kwargs):
+    if registered_tool_name not in TOOLS:
+        raise ValueError(f"Unknown tool: {registered_tool_name}")
+
+    result = TOOLS[registered_tool_name](**kwargs)
+
+    if inspect.isawaitable(result):
+        result = await result
+
+    return result
+
+--- lines 199-205 ---
+from integrations.youtube.tools import (
+    youtube_status,
+    youtube_channel,
+    youtube_controls,
+    youtube_upload,
+    youtube_upload_autonomous,
+)
+
+--- lines 219-219 ---
+from integrations.video_clipping.engine import transcribe_video
+
+--- lines 221-221 ---
+TOOLS["video_transcribe"] = transcribe_video
+
+--- lines 223-227 ---
+from integrations.x_platform.tools import (
+    x_status,
+    x_account,
+    x_analytics,
+)
+
+--- lines 236-239 ---
+from integrations.x_platform.tools import (
+    x_search_trends,
+    x_account_timeline,
+)
+
+--- lines 247-247 ---
+from integrations.x_platform.tools import x_post, x_thread
+
+--- lines 255-255 ---
+import skills.x_growth.tool_registration
+
+--- lines 260-260 ---
+from skills.signal_commander.discovery_orchestrator import run_discovery
+
+--- lines 263-268 ---
+async def signal_commander_discover(root_niche="Artificial Intelligence"):
+    if not isinstance(root_niche, str) or not root_niche.strip():
+        raise ValueError("A valid root niche is required.")
+    if len(root_niche) > 120:
+        raise ValueError("Root niche must not exceed 120 characters.")
+    return await run_discovery(root_niche=root_niche.strip())
+
+--- lines 271-271 ---
+TOOLS["signal_commander_discover"] = signal_commander_discover
+
+--- lines 274-274 ---
+from agents.task_store import get_tasks, update_task
+
+--- lines 276-277 ---
+def nexus_list_agent_tasks(status=None, limit=100):
+    return get_tasks(status=status, limit=limit)
+
+--- lines 279-280 ---
+def nexus_update_agent_task(task_id, status):
+    return update_task(task_id, status)
+
+--- lines 282-297 ---
+def nexus_agent_workload():
+    records = get_tasks(limit=1000)["tasks"]
+    workload = {}
+    for task in records:
+        agent_id = task.get("agent_id", "unknown")
+        entry = workload.setdefault(agent_id, {
+            "agent_id": agent_id,
+            "agent_name": task.get("agent_name", "Unknown"),
+            "total": 0,
+            "statuses": {}
+        })
+        entry["total"] += 1
+        current = task.get("status", "UNKNOWN")
+        entry["statuses"][current] = entry["statuses"].get(current, 0) + 1
+    return {"status": "SUCCESS", "total_tasks": len(records),
+            "agent_workloads": list(workload.values())}
+
+--- lines 299-299 ---
+TOOLS["nexus_list_agent_tasks"] = nexus_list_agent_tasks
+
+--- lines 300-300 ---
+TOOLS["nexus_update_agent_task"] = nexus_update_agent_task
+
+--- lines 301-301 ---
+TOOLS["nexus_agent_workload"] = nexus_agent_workload
+
+--- lines 304-310 ---
+from skills.signal_commander.intelligence_dashboard import (
+    get_intelligence_dashboard,
+    get_discovery_memory_insights,
+    get_signal_commander_insights,
+    search_discovery_reports,
+    audit_central_tool_registry,
+)
+
+--- lines 312-312 ---
+TOOLS["signal_commander_dashboard"] = get_intelligence_dashboard
+
+--- lines 313-313 ---
+TOOLS["signal_commander_memory"] = get_discovery_memory_insights
+
+--- lines 314-314 ---
+TOOLS["signal_commander_insights"] = get_signal_commander_insights
+
+--- lines 315-315 ---
+TOOLS["signal_commander_report_search"] = search_discovery_reports
+
+--- lines 316-316 ---
+TOOLS["signal_commander_registry_audit"] = audit_central_tool_registry
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    print("NEXUS AI TOOL EXECUTION ENGINE")
+    print("--------------------------------")
+
+    print("\nAVAILABLE TOOLS:")
+    for tool in get_available_tools():
+        print("-", tool)
+
+    print("\nMCP CONNECTIONS:")
+    print(get_mcp_servers())
+
+    print("\nStatus: READY")
+
+==========================================================================================
+FILE: tools/github_tools.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import os
+
+--- lines 3-3 ---
+from pathlib import Path
+
+--- lines 4-4 ---
+from fastmcp import Client
+
+--- lines 6-6 ---
+CONFIG = Path(__file__).resolve().parent.parent / "config" / "mcp_servers.json"
+
+--- lines 8-19 ---
+ALLOWED_TOOLS = {
+    "get_commit", "get_file_contents", "get_label",
+    "get_latest_release", "get_me", "get_release_by_tag",
+    "get_tag", "get_team_members", "get_teams",
+    "issue_read", "list_branches", "list_commits",
+    "list_issue_fields", "list_issue_types", "list_issues",
+    "list_pull_requests", "list_releases",
+    "list_repository_collaborators", "list_tags",
+    "pull_request_read", "search_code", "search_commits",
+    "search_issues", "search_pull_requests",
+    "search_repositories", "search_users", "ui_get"
+}
+
+--- lines 21-38 ---
+async def github_call(tool_name, arguments):
+    if tool_name not in ALLOWED_TOOLS:
+        raise PermissionError("GitHub tool not allowed.")
+
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    server = config["mcpServers"]["github"]
+    [REDACTED - POSSIBLE SECRET]
+    if not token:
+        raise RuntimeError("GitHub token is not loaded in this PowerShell session.")
+    [REDACTED - POSSIBLE SECRET]
+
+    async with Client({"mcpServers": {"github": server}}) as client:
+        async def skip_schema_validation(name, result):
+            return None
+
+        client.session.validate_tool_result = skip_schema_validation
+
+        return await client.call_tool_mcp(tool_name, arguments)
+
+==========================================================================================
+FILE: integrations/youtube/manager.py
+==========================================================================================
+
+--- lines 2-2 ---
+from integrations.youtube.secure_storage import token_status
+
+--- lines 3-3 ---
+from integrations.youtube.channel import get_my_channel
+
+--- lines 4-4 ---
+from integrations.youtube.upload import load_config
+
+--- lines 7-14 ---
+def status():
+    return {
+        "platform": "YouTube",
+        "connection": token_status(),
+        "publishing_enabled": load_config().get("publishing_enabled", False),
+        "approval_required": load_config().get("require_human_approval", True),
+        "default_privacy": load_config().get("default_privacy", "private"),
+    }
+
+--- lines 17-20 ---
+def channel():
+    if not token_status()["connected"]:
+        return {"connected": False, "message": "YouTube account not connected"}
+    return get_my_channel()
+
+--- lines 23-32 ---
+def publishing_controls():
+    config = load_config()
+    return {
+        "enabled": config.get("enabled", False),
+        "publishing_enabled": config.get("publishing_enabled", False),
+        "public_publish_allowed": config.get("allow_public_publish", False),
+        "approval_required": config.get("require_human_approval", True),
+        "default_privacy": config.get("default_privacy", "private"),
+        "daily_limit": config.get("max_uploads_per_day", 3),
+    }
+
+==========================================================================================
+FILE: integrations/youtube/tools.py
+==========================================================================================
+
+--- lines 2-2 ---
+from integrations.youtube.manager import status, channel, publishing_controls
+
+--- lines 3-3 ---
+from integrations.youtube.upload import upload_video
+
+--- lines 4-4 ---
+from tools.approval import approve_tool_call
+
+--- lines 7-8 ---
+def youtube_status():
+    return status()
+
+--- lines 11-12 ---
+def youtube_channel():
+    return channel()
+
+--- lines 15-16 ---
+def youtube_controls():
+    return publishing_controls()
+
+--- lines 19-29 ---
+def youtube_upload(**kwargs):
+    arguments = dict(kwargs)
+    arguments.pop("approved", None)
+
+    if not isinstance(arguments.get("made_for_kids"), bool):
+        raise ValueError("Explicit made_for_kids declaration required.")
+
+    if not approve_tool_call("youtube_upload", arguments):
+        return "YouTube upload cancelled. Permission denied."
+
+    return upload_video(**arguments, approved=True)
+
+--- lines 31-36 ---
+def youtube_upload_autonomous(**kwargs):
+    """Autonomous YouTube uploads authorized by the video-specific policy."""
+    from integrations.youtube.upload import upload_video_autonomous
+
+    kwargs.pop("approved", None)
+    return upload_video_autonomous(**kwargs)
+
+==========================================================================================
+FILE: integrations/youtube/upload.py
+==========================================================================================
+
+--- lines 2-2 ---
+import json
+
+--- lines 3-3 ---
+from pathlib import Path
+
+--- lines 4-4 ---
+from integrations.youtube.oauth import get_youtube_service
+
+--- lines 5-5 ---
+from integrations.youtube.upload_limiter import can_upload, record_upload
+
+--- lines 7-7 ---
+CONFIG_PATH = Path(__file__).with_name("config.json")
+
+--- lines 10-12 ---
+def load_config():
+    with CONFIG_PATH.open("r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+--- lines 15-95 ---
+def upload_video(
+    video_path,
+    title,
+    description="",
+    tags=None,
+    category_id="22",
+    privacy_status=None,
+    approved=False,
+    made_for_kids=None,
+):
+    from integrations.video_clipping.media_preflight import validate_for_platform
+    _media_check = validate_for_platform(video_path, 'youtube')
+    if not _media_check.get('valid'):
+        raise ValueError('YouTube media preflight rejected upload: ' + '; '.join(_media_check.get('errors', [])))
+    if not isinstance(made_for_kids, bool):
+        raise ValueError("Explicit made_for_kids True/False declaration required.")
+
+    config = load_config()
+
+    if not config.get("enabled") or not config.get("publishing_enabled"):
+        raise PermissionError("YouTube publishing is disabled.")
+    limit = int(config.get("max_uploads_per_day", 3))
+    if not can_upload(limit):
+        raise PermissionError("Daily upload limit reached.")
+
+    if config.get("require_human_approval", True) and not approved:
+        raise PermissionError("Human approval required.")
+
+    path = Path(video_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError("Video file not found.")
+
+    max_size = config.get("max_video_size_mb", 512) * 1024 * 1024
+    if path.stat().st_size > max_size:
+        raise ValueError("Video exceeds configured size limit.")
+
+    allowed_extensions = config.get("allowed_video_extensions", [".mp4"])
+    if path.suffix.lower() not in allowed_extensions:
+        raise ValueError("Unsupported video format.")
+
+    privacy_status = privacy_status or config.get("default_privacy", "private")
+
+    if privacy_status not in ("private", "unlisted", "public"):
+        raise ValueError("Invalid privacy setting.")
+
+    if privacy_status == "public" and not config.get("allow_public_publish", False):
+        raise PermissionError("Public publishing is disabled.")
+
+    youtube = get_youtube_service()
+
+    from googleapiclient.http import MediaFileUpload
+
+    body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description,
+            "tags": tags or [],
+            "categoryId": str(category_id),
+        },
+        "status": {
+            "privacyStatus": privacy_status,
+            "selfDeclaredMadeForKids": made_for_kids,
+        },
+    }
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=MediaFileUpload(
+            str(path), chunksize=8 * 1024 * 1024, resumable=True
+        ),
+    )
+
+    result = request.execute()
+    record_upload(limit)
+
+    return {
+        "uploaded": True,
+        "video_id": result.get("id"),
+        "privacy_status": privacy_status,
+    }
+
+--- lines 99-119 ---
+def upload_video_autonomous(**kwargs):
+    """Video-policy-authorized autonomous YouTube upload."""
+    [REDACTED - POSSIBLE SECRET]
+
+    kwargs.pop("approved", None)
+    privacy = kwargs.pop("privacy_status", None) or "private"
+    authorize_publication("youtube", privacy)
+
+    config = load_config()
+    if privacy == "private" and config.get("allow_autonomous_private_uploads") is not True:
+        raise PermissionError("Autonomous private YouTube uploads are disabled.")
+    if privacy == "public" and config.get("allow_public_publish") is not True:
+        raise PermissionError("Public YouTube publishing is disabled.")
+    if "made_for_kids" not in kwargs or not isinstance(kwargs["made_for_kids"], bool):
+        raise ValueError("Explicit made_for_kids declaration required.")
+
+    return upload_video(
+        **kwargs,
+        privacy_status=privacy,
+        approved=True,
+    )
+
+==========================================================================================
+FILE: integrations/youtube/upload_limiter.py
+==========================================================================================
+
+--- lines 2-2 ---
+import json
+
+--- lines 3-3 ---
+from datetime import date
+
+--- lines 4-4 ---
+from pathlib import Path
+
+--- lines 6-6 ---
+STATE_FILE = Path(__file__).with_name("upload_state.json")
+
+--- lines 9-19 ---
+def load_state():
+    if not STATE_FILE.exists():
+        return {"date": date.today().isoformat(), "uploads": 0}
+
+    try:
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8-sig"))
+        if state.get("date") != date.today().isoformat():
+            return {"date": date.today().isoformat(), "uploads": 0}
+        return state
+    except (ValueError, OSError):
+        return {"date": date.today().isoformat(), "uploads": 0}
+
+--- lines 22-23 ---
+def can_upload(limit=3):
+    return load_state()["uploads"] < limit
+
+--- lines 26-33 ---
+def record_upload(limit=3):
+    state = load_state()
+    if state["uploads"] >= limit:
+        raise PermissionError("Daily YouTube upload limit reached.")
+
+    state["uploads"] += 1
+    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return state
+
+==========================================================================================
+FILE: integrations/video_clipping/video_autopilot.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import time
+
+--- lines 3-3 ---
+import inspect
+
+--- lines 4-4 ---
+import hashlib
+
+--- lines 5-5 ---
+import traceback
+
+--- lines 6-6 ---
+from pathlib import Path
+
+--- lines 8-8 ---
+from integrations.video_clipping import engine
+
+--- lines 9-9 ---
+from integrations.video_clipping import video_enhancements
+
+--- lines 10-10 ---
+from integrations.video_clipping import job_manager
+
+--- lines 13-13 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 14-14 ---
+OUTPUT = ROOT / "workspace" / "video_output"
+
+--- lines 15-15 ---
+TRANSCRIPTS = OUTPUT / "transcripts"
+
+--- lines 16-16 ---
+SHORTS = OUTPUT / "shorts"
+
+--- lines 17-17 ---
+METADATA = OUTPUT / "metadata"
+
+--- lines 23-35 ---
+def _call_adaptively(function, values):
+    signature = inspect.signature(function)
+    kwargs = {}
+
+    for name, parameter in signature.parameters.items():
+        if name in values:
+            kwargs[name] = values[name]
+        elif parameter.default is inspect.Parameter.empty:
+            raise RuntimeError(
+                f"Unsupported required engine parameter: {name}"
+            )
+
+    return function(**kwargs)
+
+--- lines 38-48 ---
+def _segments_from_transcription(result):
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+        for key in ("segments", "results", "transcription"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return value
+
+    raise ValueError("Whisper returned no usable transcript segments")
+
+--- lines 51-78 ---
+def _normalize_highlights(items):
+    normalized = []
+
+    if not isinstance(items, list):
+        return normalized
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            start = float(item.get("start", item.get("start_seconds")))
+            end = float(item.get("end", item.get("end_seconds")))
+
+            if end <= start or start < 0:
+                continue
+
+            normalized.append({
+                "start": start,
+                "end": end,
+                "duration": end - start,
+                "score": float(item.get("score", item.get("rank", 0))),
+                "text": str(item.get("text", item.get("reason", "")))[:1000]
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return normalized
+
+--- lines 81-213 ---
+def process_job(job):
+    job_id = job["id"]
+    source = Path(job["source"]).resolve()
+
+    if not source.is_file():
+        raise FileNotFoundError("Source video no longer exists")
+
+    digest = hashlib.sha256(
+        str(source).encode("utf-8") +
+        str(source.stat().st_size).encode("ascii")
+    ).hexdigest()[:16]
+
+    metadata_path = METADATA / f"{job_id}.json"
+    transcript_path = TRANSCRIPTS / f"{job_id}.json"
+
+    duplicate = video_enhancements.find_duplicate(source)
+    if duplicate["duplicate"]:
+        raise RuntimeError("Duplicate source video detected")
+
+    # Probe source video.
+    probe = engine.probe_video(str(source))
+
+    if not isinstance(probe, dict):
+        raise ValueError("Video probe returned invalid metadata")
+
+    duration = float(
+        probe.get("duration", 0) if probe else 0
+    )
+
+    if duration <= 0:
+        raise ValueError("Video duration is missing or invalid")
+
+    # Transcribe with existing Whisper implementation.
+    transcription = _call_adaptively(
+        engine.transcribe_video,
+        {
+            "video_path": str(source),
+            "input_path": str(source),
+            "model_size": "base",
+            "model": "base",
+            "language": None
+        }
+    )
+
+    segments = _segments_from_transcription(transcription)
+
+    transcript_path.write_text(
+        json.dumps({
+            "job_id": job_id,
+            "source": str(source),
+            "segments": segments,
+            "created_at": time.time()
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+    # Rank highlights using existing engine.
+    raw_highlights = engine.detect_highlights(segments, top_k=10)
+    highlights = _normalize_highlights(raw_highlights)
+
+    outputs = []
+
+    for index, highlight in enumerate(highlights, start=1):
+        start = max(0, highlight["start"])
+        end = min(duration, highlight["end"])
+        clip_duration = end - start
+
+        if clip_duration < 3:
+            continue
+
+        clip_name = f"{job_id}_short_{index:02d}.mp4"
+        clip_path = SHORTS / clip_name
+
+        engine.create_vertical_short(
+            str(source),
+            start,
+            clip_duration,
+            str(clip_path)
+        )
+
+        if not clip_path.is_file():
+            continue
+
+        caption_result = video_enhancements.create_captioned_clip(
+            str(clip_path),
+            segments,
+            start,
+            clip_duration,
+            str(clip_path)
+        )
+
+        outputs.append({
+            "video": caption_result.get("video", str(clip_path)),
+            "subtitle": caption_result.get("subtitle"),
+            "caption_status": caption_result.get("status"),
+            "start": start,
+            "duration": clip_duration,
+            "score": highlight["score"],
+            "text": highlight["text"],
+            "platform_profiles": list(
+                video_enhancements.PROFILES.keys()
+            )
+        })
+
+    report = {
+        "job_id": job_id,
+        "source": str(source),
+        "source_fingerprint": digest,
+        "duration": duration,
+        "transcript": str(transcript_path),
+        "highlights_detected": len(highlights),
+        "shorts_created": len(outputs),
+        "outputs": outputs,
+        "completed_at": time.time()
+    }
+
+    metadata_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+    try:
+        report["manifest"] = video_enhancements.build_manifest(
+            job_id, source, segments, outputs
+        )
+        video_enhancements.register_video(source, {
+            "job_id": job_id,
+            "duration": duration
+        })
+    except Exception as exc:
+        report["manifest_error"] = type(exc).__name__
+
+    return report
+
+--- lines 216-237 ---
+def process_next_job():
+    job = job_manager.next_job()
+
+    if not job:
+        return {"status": "IDLE"}
+
+    job_id = job["id"]
+    job_manager.update_job(job_id, "PROCESSING")
+
+    try:
+        result = process_job(job)
+        job_manager.update_job(job_id, "COMPLETED")
+        return {"status": "COMPLETED", "result": result}
+
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {str(exc)[:250]}"
+        job_manager.update_job(job_id, "FAILED", error=error)
+        return {
+            "status": "FAILED",
+            "job_id": job_id,
+            "error": error
+        }
+
+--- lines 240-249 ---
+def process_queue(max_jobs=1):
+    results = []
+
+    for _ in range(max(1, min(int(max_jobs), 3))):
+        result = process_next_job()
+        if result["status"] == "IDLE":
+            break
+        results.append(result)
+
+    return results
+
+==========================================================================================
+FILE: integrations/video_clipping/job_manager.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import time
+
+--- lines 3-3 ---
+import uuid
+
+--- lines 4-4 ---
+from pathlib import Path
+
+--- lines 6-6 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 7-7 ---
+INBOX = ROOT / "workspace" / "video_inbox"
+
+--- lines 8-8 ---
+OUTPUT = ROOT / "workspace" / "video_output"
+
+--- lines 9-9 ---
+QUEUE = ROOT / "config" / "video_jobs.json"
+
+--- lines 15-20 ---
+def _read():
+    try:
+        data = json.loads(QUEUE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+--- lines 23-26 ---
+def _save(jobs):
+    temp = QUEUE.with_suffix(".tmp")
+    temp.write_text(json.dumps(jobs, indent=2), encoding="utf-8")
+    temp.replace(QUEUE)
+
+--- lines 29-65 ---
+def submit_video(filename, priority=5):
+    source = (INBOX / filename).resolve()
+
+    if source.parent != INBOX.resolve():
+        raise ValueError("Video must be inside the video inbox")
+
+    if not source.is_file():
+        raise FileNotFoundError(str(source))
+
+    if source.suffix.lower() not in {
+        ".mp4", ".mov", ".mkv", ".avi", ".webm"
+    }:
+        raise ValueError("Unsupported video format")
+
+    jobs = _read()
+
+    for job in jobs:
+        if (
+            job.get("source") == str(source)
+            and job.get("status") in {"QUEUED", "PROCESSING"}
+        ):
+            return {"status": "ALREADY_QUEUED", "job_id": job["id"]}
+
+    now = time.time()
+    job = {
+        "id": uuid.uuid4().hex,
+        "source": str(source),
+        "priority": max(1, min(int(priority), 10)),
+        "status": "QUEUED",
+        "attempts": 0,
+        "created_at": now,
+        "updated_at": now
+    }
+
+    jobs.append(job)
+    _save(jobs)
+    return {"status": "QUEUED", "job_id": job["id"]}
+
+--- lines 68-77 ---
+def next_job():
+    pending = [
+        j for j in _read()
+        if j.get("status") == "QUEUED"
+        and int(j.get("attempts", 0)) < 3
+    ]
+    pending.sort(
+        key=lambda j: (-int(j.get("priority", 5)), j["created_at"])
+    )
+    return pending[0] if pending else None
+
+--- lines 80-108 ---
+def update_job(job_id, status, error=None):
+    if status not in {"PROCESSING", "COMPLETED", "FAILED", "QUEUED"}:
+        raise ValueError("Invalid status")
+
+    jobs = _read()
+
+    for job in jobs:
+        if job["id"] != job_id:
+            continue
+
+        now = time.time()
+        job["updated_at"] = now
+
+        if status == "PROCESSING":
+            job["attempts"] = int(job.get("attempts", 0)) + 1
+            job["started_at"] = now
+
+        if error:
+            job["last_error"] = str(error)[:300]
+
+        if status == "FAILED" and job.get("attempts", 0) < 3:
+            job["status"] = "QUEUED"
+        else:
+            job["status"] = status
+
+        _save(jobs)
+        return job
+
+    raise KeyError("Unknown job ID")
+
+--- lines 111-116 ---
+def list_jobs():
+    return sorted(
+        _read(),
+        key=lambda j: j.get("created_at", 0),
+        reverse=True
+    )
+
+--- lines 119-141 ---
+def recover_stale_jobs(max_age_seconds=3600):
+    jobs = _read()
+    recovered = 0
+    now = time.time()
+
+    for job in jobs:
+        if job.get("status") != "PROCESSING":
+            continue
+
+        if now - float(job.get("updated_at", 0)) < max_age_seconds:
+            continue
+
+        job["status"] = (
+            "QUEUED" if int(job.get("attempts", 0)) < 3 else "FAILED"
+        )
+        job["updated_at"] = now
+        job["last_error"] = "Recovered interrupted processing job"
+        recovered += 1
+
+    if recovered:
+        _save(jobs)
+
+    return recovered
+
+==========================================================================================
+FILE: integrations/video_clipping/publication_manager.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import time
+
+--- lines 3-3 ---
+import uuid
+
+--- lines 4-4 ---
+import hashlib
+
+--- lines 5-5 ---
+from pathlib import Path
+
+--- lines 7-7 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 8-8 ---
+QUEUE = ROOT / "config" / "video_publication_queue.json"
+
+--- lines 9-9 ---
+HISTORY = ROOT / "workspace" / "video_output" / "publication_history.jsonl"
+
+--- lines 11-16 ---
+PLATFORMS = {
+    "youtube_shorts",
+    "youtube",
+    "tiktok",
+    "instagram_reels"
+}
+
+--- lines 19-24 ---
+def _read():
+    try:
+        data = json.loads(QUEUE.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+--- lines 27-31 ---
+def _save(jobs):
+    QUEUE.parent.mkdir(parents=True, exist_ok=True)
+    temp = QUEUE.with_suffix(".tmp")
+    temp.write_text(json.dumps(jobs, indent=2), encoding="utf-8")
+    temp.replace(QUEUE)
+
+--- lines 34-39 ---
+def _fingerprint(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+--- lines 42-94 ---
+def enqueue(video_path, platform, metadata, privacy="private",
+            scheduled_at=None):
+    path = Path(video_path).resolve()
+
+    if platform not in PLATFORMS:
+        raise ValueError("Unsupported publishing platform")
+
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+
+    if path.suffix.lower() not in {".mp4", ".mov", ".mkv"}:
+        raise ValueError("Unsupported publishing format")
+
+    fingerprint = _fingerprint(path)
+    jobs = _read()
+
+    for job in jobs:
+        if (
+            job.get("fingerprint") == fingerprint
+            and job.get("platform") == platform
+            and job.get("status") in {
+                "QUEUED", "PUBLISHING", "PUBLISHED"
+            }
+        ):
+            return {
+                "status": "DUPLICATE",
+                "job_id": job["id"]
+            }
+
+    if privacy not in {"private", "unlisted", "public"}:
+        raise ValueError("Invalid privacy setting")
+
+    now = time.time()
+
+    job = {
+        "id": uuid.uuid4().hex,
+        "video_path": str(path),
+        "fingerprint": fingerprint,
+        "platform": platform,
+        "privacy": privacy,
+        "metadata": metadata or {},
+        "scheduled_at": scheduled_at,
+        "status": "QUEUED",
+        "attempts": 0,
+        "created_at": now,
+        "updated_at": now,
+        "external_id": None
+    }
+
+    jobs.append(job)
+    _save(jobs)
+
+    return {"status": "QUEUED", "job_id": job["id"]}
+
+--- lines 97-102 ---
+def list_publications():
+    return sorted(
+        _read(),
+        key=lambda item: item.get("created_at", 0),
+        reverse=True
+    )
+
+--- lines 105-143 ---
+def update_publication(job_id, status, result=None, error=None):
+    allowed = {
+        "QUEUED", "PUBLISHING", "PUBLISHED",
+        "FAILED", "REVIEW_REQUIRED"
+    }
+
+    if status not in allowed:
+        raise ValueError("Invalid publication status")
+
+    jobs = _read()
+
+    for job in jobs:
+        if job["id"] != job_id:
+            continue
+
+        job["status"] = status
+        job["updated_at"] = time.time()
+
+        if result:
+            job["external_id"] = result.get("video_id")
+            job["external_url"] = result.get("url")
+
+        if error:
+            job["last_error"] = str(error)[:300]
+
+        _save(jobs)
+
+        HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        with HISTORY.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({
+                "job_id": job_id,
+                "status": status,
+                "timestamp": time.time(),
+                "error": str(error)[:300] if error else None
+            }) + "\n")
+
+        return job
+
+    raise KeyError("Publication job not found")
+
+--- lines 146-156 ---
+def get_ready_jobs():
+    now = time.time()
+
+    return [
+        job for job in list_publications()
+        if job.get("status") == "QUEUED"
+        and (
+            job.get("scheduled_at") is None
+            or float(job["scheduled_at"]) <= now
+        )
+    ]
+
+--- lines 159-179 ---
+def recover_interrupted():
+    jobs = _read()
+    count = 0
+
+    for job in jobs:
+        if job.get("status") != "PUBLISHING":
+            continue
+
+        # An interrupted network upload may already have reached
+        # the platform. Never blindly retry an uncertain upload.
+        job["status"] = "REVIEW_REQUIRED"
+        job["last_error"] = (
+            "Interrupted upload; reconcile remote platform state first"
+        )
+        job["updated_at"] = time.time()
+        count += 1
+
+    if count:
+        _save(jobs)
+
+    return count
+
+==========================================================================================
+FILE: integrations/video_clipping/video_publisher.py
+==========================================================================================
+
+--- lines 1-1 ---
+import json
+
+--- lines 2-2 ---
+import time
+
+--- lines 3-3 ---
+from pathlib import Path
+
+--- lines 5-9 ---
+from integrations.video_clipping.publication_manager import (
+    get_ready_jobs,
+    update_publication,
+    recover_interrupted
+)
+
+--- lines 11-11 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 12-12 ---
+YOUTUBE_CONFIG = ROOT / "integrations" / "youtube" / "config.json"
+
+--- lines 13-13 ---
+VIDEO_POLICY = ROOT / "config" / "video_autopilot.policy.json"
+
+--- lines 16-17 ---
+def _read_json(path):
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+--- lines 20-27 ---
+def _settings_autonomous():
+    from core.settings import load_settings
+    settings = load_settings()
+
+    if isinstance(settings, dict):
+        return settings.get("autonomous_mode") is True
+
+    return getattr(settings, "autonomous_mode", False) is True
+
+--- lines 31-39 ---
+def publish_youtube(job):
+    from integrations.video_clipping.platform_adapters import publish
+
+    return publish(
+        "youtube",
+        job["video_path"],
+        job.get("metadata", {}),
+        job.get("privacy", "private")
+    )
+
+--- lines 42-121 ---
+def process_publication_queue(max_jobs=1):
+    [REDACTED - POSSIBLE SECRET]
+    try:
+        policy = load_policy()
+        if policy.get("enabled") is not True or policy.get("auto_publish_enabled") is not True:
+            return [{"status": "DISABLED", "reason": "Autonomous video publishing is disabled"}]
+    except Exception as exc:
+        return [{"status": "DISABLED", "reason": str(exc)}]
+
+    recover_interrupted()
+
+    results = []
+
+    cap = min(3, max(1, int(policy.get("maximum_publications_per_cycle", 1))))
+    requested = max(1, min(int(max_jobs), 3, cap))
+    for job in get_ready_jobs()[:requested]:
+        platform = job.get("platform")
+
+        update_publication(job["id"], "PUBLISHING")
+
+        try:
+            if platform in {"youtube", "youtube_shorts"}:
+                result = publish_youtube(job)
+            elif platform in {"tiktok", "instagram_reels"}:
+                from integrations.video_clipping.platform_adapters import publish
+                result = publish(
+                    platform,
+                    job["video_path"],
+                    job.get("metadata", {}),
+                    job.get("privacy", "private")
+                )
+
+            else:
+                result = {
+                    "status": "REVIEW_REQUIRED",
+                    "reason": (
+                        "Platform-specific API adapter and account "
+                        [REDACTED - POSSIBLE SECRET]
+                    )
+                }
+
+            status = result.get("status", "REVIEW_REQUIRED")
+
+            if status == "PUBLISHED":
+                update_publication(
+                    job["id"],
+                    "PUBLISHED",
+                    result=result.get("result", {})
+                )
+            elif status == "FAILED":
+                update_publication(
+                    job["id"], "FAILED",
+                    error=result.get("reason")
+                )
+            else:
+                update_publication(
+                    job["id"], "REVIEW_REQUIRED",
+                    error=result.get("reason"),
+                    result=result.get("result", {})
+                )
+
+            results.append({
+                "job_id": job["id"],
+                **result
+            })
+
+        except Exception as exc:
+            # Do not blindly retry uncertain uploads.
+            update_publication(
+                job["id"],
+                "REVIEW_REQUIRED",
+                error=type(exc).__name__
+            )
+            results.append({
+                "job_id": job["id"],
+                "status": "REVIEW_REQUIRED",
+                "error": type(exc).__name__
+            })
+
+    return results
+
+--- lines 124-193 ---
+def monitor_publication_job(job):
+    """Read publication status without resubmitting or duplicating uploads."""
+    from integrations.video_clipping.platform_adapters import publish
+    platform = job.get("platform")
+    job_id = job.get("id")
+    metadata = job.get("metadata") or {}
+    previous = job.get("result") or {}
+
+    publish_id = previous.get("publish_id")
+    container_id = previous.get("container_id")
+
+    try:
+        if platform == "tiktok":
+            if not publish_id:
+                return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                        "reason": "TikTok publish ID missing; manual investigation required"}
+            from integrations.tiktok.client import NexusTikTokClient
+            response = NexusTikTokClient().publication_status(publish_id)
+            data = response.get("data", {}) if isinstance(response, dict) else {}
+            state = str(data.get("status", "UNKNOWN")).upper()
+
+            if state in {"PUBLISH_COMPLETE", "PUBLISHED", "SUCCESS"}:
+                return {"job_id": job_id, "status": "PUBLISHED",
+                        "result": {"publish_id": publish_id, "platform_status": state}}
+            if state in {"FAILED", "PUBLISH_FAILED"}:
+                return {"job_id": job_id, "status": "FAILED",
+                        "reason": str(data.get("fail_reason", state))[:300],
+                        "result": {"publish_id": publish_id, "platform_status": state}}
+
+            return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                    "reason": "TikTok publication is not confirmed complete",
+                    "result": {"publish_id": publish_id, "platform_status": state}}
+
+        if platform == "instagram_reels":
+            if not container_id:
+                return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                        "reason": "Instagram container ID missing; manual investigation required"}
+            from integrations.instagram.reels_publisher import reel_status
+            response = reel_status(container_id)
+            state = str(response.get("status_code", "UNKNOWN")).upper()
+
+            if state == "FINISHED":
+                [REDACTED - POSSIBLE SECRET]
+                authorize_publication("instagram_reels", "public")
+                from integrations.instagram.reels_publisher import publish_reel
+                published = publish_reel(container_id, consent=True)
+                media_id = published.get("id") if isinstance(published, dict) else None
+                if not media_id:
+                    return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                            "reason": "Instagram publish response has no verifiable media ID; do not retry",
+                            "result": {"container_id": container_id}}
+                return {"job_id": job_id, "status": "PUBLISHED",
+                        "result": {"media_id": media_id, "container_id": container_id}}
+
+            if state in {"ERROR", "EXPIRED"}:
+                return {"job_id": job_id, "status": "FAILED",
+                        "reason": "Instagram container cannot be published: " + state,
+                        "result": {"container_id": container_id, "container_status": state}}
+
+            return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                    "reason": "Instagram container is still processing or its status is uncertain",
+                    "result": {"container_id": container_id, "container_status": state}}
+
+        return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                "reason": "Unsupported monitoring platform"}
+
+    except Exception as exc:
+        return {"job_id": job_id, "status": "REVIEW_REQUIRED",
+                "reason": "Status check failed: " + type(exc).__name__,
+                "result": previous}
+
+--- lines 196-265 ---
+def monitor_pending_publications(jobs=None):
+    """Poll pending jobs from the queue file or an explicitly supplied job list."""
+    import json
+
+    queue_path = Path(__file__).resolve().parents[2] / "config" / "video_publication_queue.json"
+
+    if jobs is None:
+        if not queue_path.is_file():
+            return [{"status": "REVIEW_REQUIRED", "reason": "Publication queue file not found"}]
+        try:
+            stored = json.loads(queue_path.read_text(encoding="utf-8-sig"))
+        except Exception as exc:
+            return [{"status": "REVIEW_REQUIRED", "reason": "Queue read failed: " + type(exc).__name__}]
+
+        found = []
+        def collect(value):
+            if isinstance(value, dict):
+                if value.get("platform") in {"tiktok", "instagram_reels"} and value.get("status") in {
+                    "REVIEW_REQUIRED", "PUBLISHING", "PROCESSING"
+                }:
+                    found.append(value)
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+        collect(stored)
+        jobs = found
+
+    # Never contact a platform unless both configuration switches are enabled.
+    platform_config_path = Path(__file__).resolve().parents[2] / "config" / "video_platforms.json"
+    try:
+        platform_config = json.loads(platform_config_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return [{"status": "DISABLED", "reason": "Platform configuration unavailable; monitoring blocked"}]
+
+    enabled_jobs = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        platform = job.get("platform")
+        section = platform_config.get("platforms", {}).get(platform, {})
+        legacy_key = "instagram" if platform == "instagram_reels" else platform
+        legacy = platform_config.get(legacy_key, {})
+        if section.get("enabled") is True and legacy.get("enabled") is True and legacy.get("publishing_enabled") is True:
+            enabled_jobs.append(job)
+
+    jobs = enabled_jobs
+    results = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        result = monitor_publication_job(job)
+        results.append(result)
+        job_id = job.get("id")
+        if job_id:
+            try:
+                if result["status"] == "PUBLISHED":
+                    update_publication(job_id, "PUBLISHED", result=result.get("result", {}))
+                elif result["status"] == "FAILED":
+                    update_publication(job_id, "FAILED",
+                                       error=result.get("reason"),
+                                       result=result.get("result", {}))
+                else:
+                    update_publication(job_id, "REVIEW_REQUIRED",
+                                       error=result.get("reason"),
+                                       result=result.get("result", {}))
+            except Exception as exc:
+                result["queue_update_error"] = type(exc).__name__
+    return results
+
+==========================================================================================
+FILE: integrations/xmrig/autopilot.py
+==========================================================================================
+
+--- lines 3-3 ---
+import json
+
+--- lines 4-4 ---
+import time
+
+--- lines 5-5 ---
+from pathlib import Path
+
+--- lines 7-7 ---
+from integrations.xmrig import client
+
+--- lines 8-8 ---
+from integrations.xmrig.coin_selector import evaluate_opportunities
+
+--- lines 10-10 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 11-11 ---
+POLICY = ROOT / "config" / "xmrig.policy.json"
+
+--- lines 12-12 ---
+EMERGENCY = ROOT / "config" / "MINING_EMERGENCY_STOP"
+
+--- lines 13-13 ---
+AUDIT = ROOT / "logs" / "mining_autopilot.jsonl"
+
+--- lines 16-20 ---
+def _read(path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default if default is not None else {}
+
+--- lines 23-26 ---
+def _audit(event):
+    AUDIT.parent.mkdir(parents=True, exist_ok=True)
+    with AUDIT.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"timestamp": time.time(), **event}) + "\n")
+
+--- lines 29-79 ---
+def run_cycle(opportunities, electricity_price_per_kwh, hardware):
+    """Evaluate mining. Execution occurs only when policy explicitly permits it."""
+    policy = _read(POLICY)
+
+    if EMERGENCY.exists():
+        result = {"status": "EMERGENCY_STOP"}
+        _audit(result)
+        return result
+
+    if policy.get("mining_enabled") is not True:
+        return {"status": "DISABLED", "execution": False}
+
+    decision = evaluate_opportunities(
+        opportunities,
+        electricity_price_per_kwh,
+        hardware,
+        settings=policy.get("profitability_limits", {})
+    )
+
+    if decision.get("status") != "RECOMMENDATION_READY":
+        if policy.get("stop_when_unprofitable") is True:
+            current = client.status()
+            if current["status"] == "RUNNING":
+                stopped = client.stop()
+                result = {"status": "STOPPED_UNPROFITABLE", "stop": stopped,
+                          "decision": decision}
+                _audit(result)
+                return result
+        return {"status": decision.get("status"), "decision": decision,
+                "execution": False}
+
+    if policy.get("autonomous_execution_enabled") is not True:
+        return {"status": "RECOMMENDATION_ONLY", "decision": decision,
+                "execution": False}
+
+    if EMERGENCY.exists():
+        return {"status": "EMERGENCY_STOP", "execution": False}
+
+    current = client.status()
+    if current["status"] == "RUNNING":
+        return {"status": "ALREADY_RUNNING", "decision": decision,
+                "execution": False}
+
+    result = client.start()
+    output = {
+        "status": result.get("status"),
+        "decision": decision,
+        "miner": result
+    }
+    _audit(output)
+    return output
+
+--- lines 82-87 ---
+def status():
+    return {
+        "miner": client.status(),
+        "policy": _read(POLICY),
+        "emergency_stop": EMERGENCY.exists()
+    }
+
+==========================================================================================
+FILE: integrations/xmrig/monitor.py
+==========================================================================================
+
+--- lines 1-1 ---
+import argparse
+
+--- lines 2-2 ---
+import time
+
+--- lines 3-3 ---
+from integrations.xmrig import client
+
+--- lines 6-26 ---
+def monitor(interval=60):
+    print("NEXUS XMRig Monitor Started")
+    print("Interval:", interval, "seconds")
+    print("Automatic mining/restarts: DISABLED")
+
+    while True:
+        try:
+            health = client.health()
+            recovery = client.recovery_check()
+
+            print({
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "mining": health.get("status"),
+                "available_ram_gb": health.get("available_ram_gb"),
+                "recovery": recovery.get("status")
+            })
+
+        except Exception as exc:
+            print("MONITOR ERROR:", str(exc))
+
+        time.sleep(interval)
+
+--- MODULE ENTRY POINT ---
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--interval", type=int, default=60)
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
+
+    if args.once:
+        print("STATUS:", client.status())
+        print("HEALTH:", client.health())
+        print("RECOVERY:", client.recovery_check())
+    else:
+        monitor(max(10, args.interval))
+
+==========================================================================================
+FILE: integrations/xmrig/hardware_monitor.py
+==========================================================================================
+
+--- lines 3-3 ---
+import json
+
+--- lines 4-4 ---
+import os
+
+--- lines 5-5 ---
+import subprocess
+
+--- lines 6-6 ---
+import time
+
+--- lines 7-7 ---
+import ctypes
+
+--- lines 8-8 ---
+from pathlib import Path
+
+--- lines 10-10 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 11-11 ---
+POLICY = ROOT / "config" / "xmrig.policy.json"
+
+--- lines 12-12 ---
+SNAPSHOT = ROOT / "config" / "xmrig.hardware.json"
+
+--- lines 15-33 ---
+def _memory():
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)
+        ]
+
+    value = MEMORYSTATUSEX()
+    value.dwLength = ctypes.sizeof(value)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(value)):
+        raise RuntimeError("Windows memory telemetry unavailable")
+    return round(value.ullAvailPhys / 1073741824, 2)
+
+--- lines 36-51 ---
+def _cpu_percent():
+    try:
+        import psutil
+        return float(psutil.cpu_percent(interval=1))
+    except ImportError:
+        command = (
+            "(Get-Counter '\\Processor(_Total)\\% Processor Time')."
+            "CounterSamples[0].CookedValue"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True, text=True, timeout=8
+        )
+        if result.returncode != 0:
+            raise RuntimeError("CPU telemetry unavailable")
+        return round(float(result.stdout.strip()), 1)
+
+--- lines 54-71 ---
+def _temperature():
+    command = (
+        "Get-CimInstance -Namespace root/wmi "
+        "-ClassName MSAcpi_ThermalZoneTemperature "
+        "-ErrorAction Stop | "
+        "Select-Object -First 1 -ExpandProperty CurrentTemperature"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True, text=True, timeout=8
+        )
+        raw = result.stdout.strip()
+        if result.returncode != 0 or not raw:
+            return None
+        return round((float(raw) / 10.0) - 273.15, 1)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+--- lines 74-109 ---
+def collect():
+    try:
+        available_ram = _memory()
+        cpu = _cpu_percent()
+        temperature = _temperature()
+
+        try:
+            policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            policy = {}
+
+        watts = policy.get("estimated_power_watts")
+        if not isinstance(watts, (int, float)) or watts <= 0:
+            watts = None
+
+        data = {
+            "timestamp": time.time(),
+            "available_ram_gb": available_ram,
+            "cpu_percent": cpu,
+            "temperature_c": temperature,
+            "estimated_power_watts": watts,
+            "telemetry_complete": temperature is not None and watts is not None
+        }
+
+        SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = SNAPSHOT.with_suffix(".tmp")
+        temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(temp_file, SNAPSHOT)
+        return data
+
+    except Exception as exc:
+        return {
+            "telemetry_complete": False,
+            "status": "UNAVAILABLE",
+            "reason": type(exc).__name__
+        }
+
+==========================================================================================
+FILE: integrations/xmrig/performance_monitor.py
+==========================================================================================
+
+--- lines 3-3 ---
+import json
+
+--- lines 4-4 ---
+import time
+
+--- lines 5-5 ---
+import urllib.request
+
+--- lines 6-6 ---
+from pathlib import Path
+
+--- lines 8-8 ---
+ROOT = Path(__file__).resolve().parents[2]
+
+--- lines 9-9 ---
+OUTPUT = ROOT / "config" / "xmrig.performance.json"
+
+--- lines 10-10 ---
+API = "http://127.0.0.1:18088/2/summary"
+
+--- lines 13-49 ---
+def collect():
+    request = urllib.request.Request(
+        API,
+        headers={"Accept": "application/json"}
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        raw = response.read(256001)
+
+    if len(raw) > 256000:
+        raise RuntimeError("XMRig API response too large")
+
+    data = json.loads(raw.decode("utf-8"))
+    results = data.get("results", {})
+    hashrate = results.get("hashrate", {})
+    shares = results.get("shares", {})
+
+    def rate(values):
+        if isinstance(values, list) and values:
+            return float(values[0] or 0)
+        return 0.0
+
+    snapshot = {
+        "timestamp": time.time(),
+        "hashrate_10s": rate(hashrate.get("total", [])),
+        "accepted_shares": int(shares.get("accepted", 0)),
+        "rejected_shares": int(shares.get("rejected", 0)),
+        "total_shares": int(shares.get("total", 0)),
+        "uptime_seconds": int(data.get("connection", {}).get("uptime", 0)),
+        "source": "local_xmrig_api",
+        "telemetry_type": "measured"
+    }
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    temp = OUTPUT.with_suffix(".tmp")
+    temp.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    temp.replace(OUTPUT)
+    return snapshot
+
+--- lines 52-59 ---
+def get_performance(max_age_seconds=120):
+    try:
+        data = json.loads(OUTPUT.read_text(encoding="utf-8"))
+        if time.time() - float(data["timestamp"]) > max_age_seconds:
+            return None
+        return data
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+==========================================================================================
+FILE: integrations/mt5/session_controller.py
+==========================================================================================
+
+--- lines 2-2 ---
+import json
+
+--- lines 3-3 ---
+import os
+
+--- lines 4-4 ---
+import subprocess
+
+--- lines 5-5 ---
+import time
+
+--- lines 6-6 ---
+import urllib.request
+
+--- lines 7-7 ---
+import urllib.error
+
+--- lines 8-8 ---
+from datetime import datetime
+
+--- lines 9-9 ---
+from pathlib import Path
+
+--- lines 11-11 ---
+PROJECT = Path(__file__).resolve().parents[2]
+
+--- lines 12-12 ---
+BRIDGE = Path(r"C:\AI-Trading\mt5-bridge")
+
+--- lines 13-13 ---
+PYTHON = BRIDGE / ".venv" / "Scripts" / "python.exe"
+
+--- lines 14-14 ---
+CONFIG = BRIDGE / "config" / "trading_safety.json"
+
+--- lines 15-15 ---
+DATA = PROJECT / "data"
+
+--- lines 16-16 ---
+LOGS = PROJECT / "logs"
+
+--- lines 17-17 ---
+STATE = DATA / "mt5_daily_session.json"
+
+--- lines 18-18 ---
+BRIDGE_URL = "http://127.0.0.1:8001/"
+
+--- lines 19-19 ---
+BRIDGE_LOG = LOGS / "mt5_bridge.log"
+
+--- lines 21-21 ---
+MONITOR_STOP = BRIDGE / "strategy" / "signal_monitor.stop"
+
+--- lines 22-22 ---
+WORKER_STOP = BRIDGE / "strategy" / "auto_demo_worker.stop"
+
+--- lines 23-23 ---
+EMERGENCY_STOP = BRIDGE / "strategy" / "emergency_stop.flag"
+
+--- lines 25-25 ---
+MONITOR_MODULE = "strategy.signal_monitor"
+
+--- lines 26-26 ---
+WORKER_MODULE = "strategy.auto_demo_worker"
+
+--- lines 28-28 ---
+_processes = {}
+
+--- lines 29-29 ---
+_bridge_process = None
+
+--- lines 32-38 ---
+def _load_state():
+    if STATE.exists():
+        try:
+            return json.loads(STATE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+--- lines 41-43 ---
+def _save_state(state):
+    DATA.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+--- lines 46-72 ---
+def _load_safety():
+    if not CONFIG.is_file():
+        raise RuntimeError(f"Trading safety config missing: {CONFIG}")
+    config = json.loads(CONFIG.read_text(encoding="utf-8-sig"))
+    if not os.environ.get("MT5_EXPECTED_LOGIN", "").strip():
+        raise RuntimeError("MT5_EXPECTED_LOGIN is not configured")
+    required = {
+        "demo_only": True,
+        "execution_enabled": True,
+        "demo_execution_enabled": True,
+        "live_execution_enabled": False,
+        "automatic_demo_trading_enabled": True,
+        "require_stop_loss": True,
+        "require_take_profit": True,
+    }
+    for key, expected in required.items():
+        if config.get(key) is not expected:
+            raise RuntimeError(f"Safety check failed: {key} must be {expected}")
+    if float(config.get("maximum_volume", 0)) > 0.01:
+        raise RuntimeError("Maximum volume exceeds 0.01")
+    if int(config.get("maximum_open_positions", 0)) > 1:
+        raise RuntimeError("Maximum open positions exceeds 1")
+    if float(config.get("maximum_risk_percent", 0)) > 1:
+        raise RuntimeError("Maximum risk exceeds 1 percent")
+    if int(config.get("maximum_quote_age_seconds", 0)) > 300:
+        raise RuntimeError("Quote age limit exceeds 300 seconds")
+    return config
+
+--- lines 75-97 ---
+def show_plan():
+    today = datetime.now().strftime("%Y-%m-%d")
+    state = _load_state()
+    if state.get("date") != today:
+        state = {
+            "date": today,
+            "selected": ["trading"],
+            "approved": False,
+            "status": "PLANNED",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        _save_state(state)
+
+    print("\n=== NEXUS AI DAILY MT5 PLAN ===")
+    print("Date:", state["date"])
+    print("Activity: Headway-Demo automatic trading")
+    print("Account restriction: DEMO ONLY")
+    print("Per-trade human approval: NOT REQUIRED")
+    print("Daily human approval: NOT REQUIRED")
+    print("Session status:", state.get("status", "PLANNED"))
+    print("Live-account execution: BLOCKED")
+    [REDACTED - POSSIBLE SECRET]
+    return state
+
+--- lines 100-110 ---
+def _pid_running(pid):
+    if not pid:
+        return False
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return str(pid) in result.stdout
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+--- lines 113-119 ---
+def bridge_healthy():
+    try:
+        with urllib.request.urlopen(BRIDGE_URL, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return response.status == 200 and payload.get("status") == "online"
+    except Exception:
+        return False
+
+--- lines 123-135 ---
+def bridge_listener_pid():
+    """Return the PID listening on the bridge port, if any."""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command",
+         "Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    pids = {int(x) for x in result.stdout.split() if x.isdigit()}
+    if len(pids) > 1:
+        raise RuntimeError("Multiple processes reported on bridge port 8001.")
+    return next(iter(pids), None)
+
+--- lines 138-157 ---
+def bridge_process_matches(pid):
+    """Verify the exact existing MT5 bridge command before stopping it."""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command",
+         f"Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}' | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    try:
+        process = json.loads(result.stdout)
+        command = (process.get("CommandLine") or "").lower()
+        return (
+            str(BRIDGE).lower() in command
+            and "mt5_api:app" in command
+            and "--port 8001" in command
+            and "uvicorn" in command
+        )
+    except (ValueError, AttributeError):
+        return False
+
+--- lines 160-173 ---
+def _stop_verified_bridge(pid):
+    if not bridge_process_matches(pid):
+        raise RuntimeError(
+            f"Safety stop: PID {pid} does not match the verified MT5 bridge. Nothing stopped."
+        )
+    subprocess.run(
+        ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+        capture_output=True, text=True, timeout=15, check=True,
+    )
+    for _ in range(10):
+        if bridge_listener_pid() != pid:
+            return True
+        time.sleep(1)
+    raise RuntimeError(f"Verified bridge PID {pid} did not stop.")
+
+--- lines 176-227 ---
+def start_bridge_server():
+    """Start or reuse the API only. Never starts trading workers."""
+    global _bridge_process
+    state = _load_state()
+
+    if bridge_healthy():
+        pid = bridge_listener_pid()
+        state.update({"bridge_status": "ONLINE", "bridge_pid": pid})
+        _save_state(state)
+        print(f"MT5 API already healthy. Reusing PID {pid}.")
+        return True
+
+    pid = bridge_listener_pid()
+    if pid is not None:
+        if not bridge_process_matches(pid):
+            raise RuntimeError(
+                f"Port 8001 is occupied by unverified PID {pid}; refusing to stop it."
+            )
+        print(f"Found unresponsive verified bridge PID {pid}; restarting API only.")
+        _stop_verified_bridge(pid)
+
+    if not PYTHON.is_file():
+        raise RuntimeError(f"Bridge Python not found: {PYTHON}")
+
+    LOGS.mkdir(parents=True, exist_ok=True)
+    with BRIDGE_LOG.open("a", encoding="utf-8") as handle:
+        _bridge_process = subprocess.Popen(
+            [str(PYTHON), "-u", "-m", "uvicorn", "mt5_api:app",
+             "--host", "127.0.0.1", "--port", "8001"],
+            cwd=str(BRIDGE), stdin=subprocess.DEVNULL,
+            stdout=handle, stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+
+    for _ in range(20):
+        if _bridge_process.poll() is not None:
+            raise RuntimeError(f"Bridge exited during startup. Check {BRIDGE_LOG}")
+        if bridge_healthy():
+            pid = bridge_listener_pid()
+            state.update({
+                "bridge_status": "ONLINE",
+                "bridge_owned": True,
+                "bridge_pid": pid,
+                "bridge_started_at": datetime.now().isoformat(timespec="seconds"),
+            })
+            _save_state(state)
+            print(f"PASS: MT5 API online. PID {pid}. Trading workers were not started.")
+            return True
+        time.sleep(1)
+
+    _bridge_process.terminate()
+    raise RuntimeError(f"Bridge health check timed out. Check {BRIDGE_LOG}")
+
+--- lines 230-242 ---
+def bridge_server_status():
+    pid = bridge_listener_pid()
+    healthy = bridge_healthy()
+    print("\n=== MT5 API SERVER STATUS ===")
+    print("API:", "ONLINE" if healthy else "OFFLINE / UNRESPONSIVE")
+    print("Port:", "8001")
+    print("Listener PID:", pid if pid else "None")
+    if pid:
+        print("Verified bridge process:", "YES" if bridge_process_matches(pid) else "NO")
+    state = _load_state()
+    print("Trading monitor:", "RUNNING" if _pid_running(state.get("monitor_pid")) else "NOT RUNNING")
+    print("Trading worker:", "RUNNING" if _pid_running(state.get("worker_pid")) else "NOT RUNNING")
+    return healthy
+
+--- lines 245-250 ---
+def restart_bridge_server():
+    pid = bridge_listener_pid()
+    if pid is not None:
+        _stop_verified_bridge(pid)
+    print("Verified MT5 API stopped. Starting API server only...")
+    return start_bridge_server()
+
+--- lines 253-265 ---
+def stop_bridge_server():
+    pid = bridge_listener_pid()
+    if pid is None:
+        print("MT5 API server is already stopped.")
+        return True
+    _stop_verified_bridge(pid)
+    state = _load_state()
+    state.update({"bridge_status": "OFFLINE"})
+    state.pop("bridge_pid", None)
+    state.pop("bridge_owned", None)
+    _save_state(state)
+    print("PASS: Verified MT5 API server stopped. Trading workers were not changed.")
+    return True
+
+--- lines 268-270 ---
+def ensure_bridge():
+    """Trading-session bridge prerequisite; API startup remains separate."""
+    return start_bridge_server()
+
+--- lines 273-285 ---
+def status():
+    state = _load_state()
+    print("\n=== MT5 SESSION STATUS ===")
+    print("Date:", state.get("date", "No plan created"))
+    print("Approval:", "APPROVED" if state.get("approved") else "PENDING")
+    print("State:", state.get("status", "STOPPED"))
+    print("MT5 Bridge:", "ONLINE" if bridge_healthy() else "OFFLINE")
+    for name in ("monitor", "worker"):
+        pid = state.get(f"{name}_pid")
+        running = _pid_running(pid)
+        print(f"{name.title()}:",
+              f"PID {pid} RUNNING" if running else "NOT RUNNING")
+    return state
+
+--- lines 288-388 ---
+def start_session(daily_approval=False):
+    today = datetime.now().strftime("%Y-%m-%d")
+    state = _load_state()
+
+    if EMERGENCY_STOP.exists():
+        raise RuntimeError("EMERGENCY STOP ACTIVE. Manual clearance is required before restarting.")
+
+    if state.get("date") != today:
+        state.update({
+            "date": today,
+            "selected": ["trading"],
+            "approved": False,
+            "status": "PLANNED",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        _save_state(state)
+    if "trading" not in state.get("selected", []):
+        raise RuntimeError("Trading is not selected in today's plan.")
+
+    _load_safety()
+
+    ensure_bridge()
+
+    if not PYTHON.is_file():
+        raise RuntimeError(f"Bridge Python not found: {PYTHON}")
+    for module in (MONITOR_MODULE, WORKER_MODULE):
+        module_file = BRIDGE / (module.replace(".", "\\") + ".py")
+        if not module_file.is_file():
+            raise RuntimeError(f"Required module missing: {module_file}")
+
+    for name in ("monitor", "worker"):
+        if _pid_running(state.get(f"{name}_pid")):
+            raise RuntimeError(f"{name.title()} already appears to be running.")
+
+    LOGS.mkdir(parents=True, exist_ok=True)
+    MONITOR_STOP.unlink(missing_ok=True)
+    WORKER_STOP.unlink(missing_ok=True)
+
+    state.update({
+        "approved": True,
+        "approved_at": datetime.now().isoformat(timespec="seconds"),
+        "status": "STARTING",
+    })
+    _save_state(state)
+
+    launched = {}
+    try:
+        for name, module in (
+            ("monitor", MONITOR_MODULE),
+            ("worker", WORKER_MODULE),
+        ):
+            log_path = LOGS / f"mt5_{name}.log"
+            log_handle = log_path.open("a", encoding="utf-8")
+            try:
+                proc = subprocess.Popen(
+                    [str(PYTHON), "-m", module],
+                    cwd=str(BRIDGE),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                )
+            finally:
+                log_handle.close()
+            launched[name] = proc
+            time.sleep(1)
+            if proc.poll() is not None:
+                raise RuntimeError(
+                    f"{name.title()} exited during startup. Check {log_path}"
+                )
+    except Exception:
+        MONITOR_STOP.touch()
+        WORKER_STOP.touch()
+        for proc in launched.values():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        state.update({
+            "approved": False,
+            "status": "START FAILED",
+            "startup_error_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        _save_state(state)
+        raise
+
+    _processes.update(launched)
+    state.update({
+        "approved": True,
+        "approved_at": datetime.now().isoformat(timespec="seconds"),
+        "status": "RUNNING",
+        "monitor_pid": launched["monitor"].pid,
+        "worker_pid": launched["worker"].pid,
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    _save_state(state)
+    print("Session processes launched. Check /trading-status and worker logs.")
+    print("The worker must independently verify the Headway-Demo account.")
+    return state
+
+--- lines 391-413 ---
+def stop_owned_bridge(state):
+    global _bridge_process
+    if state.get("bridge_owned") is not True:
+        print("Shared MT5 bridge preserved.")
+        return True
+
+    if _bridge_process is None or _bridge_process.poll() is not None:
+        print("Owned bridge process handle unavailable; bridge left running safely.")
+        return False
+
+    try:
+        _bridge_process.terminate()
+        _bridge_process.wait(timeout=10)
+        state["bridge_owned"] = False
+        state["bridge_status"] = "OFFLINE"
+        state.pop("bridge_pid", None)
+        _save_state(state)
+        print("PASS: NEXUS-owned MT5 bridge stopped.")
+        _bridge_process = None
+        return True
+    except Exception as exc:
+        print("WARNING: Could not stop owned bridge:", repr(exc))
+        return False
+
+--- lines 419-430 ---
+def audit_emergency_event(event, state):
+    LOGS.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "event": event,
+        "session_date": state.get("date"),
+        "approval": state.get("approved", False),
+        "status": state.get("status"),
+        "bridge_owned": state.get("bridge_owned", False),
+    }
+    with (LOGS / "mt5_emergency_audit.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+--- lines 433-446 ---
+def emergency_stop():
+    state = _load_state()
+    EMERGENCY_STOP.touch()
+    MONITOR_STOP.touch()
+    WORKER_STOP.touch()
+    state.update({
+        "approved": False,
+        "status": "EMERGENCY STOP",
+        "emergency_stop_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    _save_state(state)
+    audit_emergency_event("EMERGENCY_STOP_ACTIVATED", state)
+    print("EMERGENCY STOP ACTIVE: Approval revoked; trading processes signalled to stop.")
+    return state
+
+--- lines 448-474 ---
+def clear_emergency_stop():
+    state = _load_state()
+
+    running = [
+        name for name in ("monitor", "worker")
+        if _pid_running(state.get(f"{name}_pid"))
+    ]
+    if running:
+        raise RuntimeError(
+            "Cannot clear emergency stop; processes still running: "
+            + ", ".join(running)
+        )
+
+    if not EMERGENCY_STOP.exists():
+        print("Emergency stop is already clear.")
+        return state
+
+    EMERGENCY_STOP.unlink()
+    state.update({
+        "approved": False,
+        "status": "EMERGENCY STOP CLEARED - APPROVAL REQUIRED",
+        "emergency_stop_cleared_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    _save_state(state)
+    audit_emergency_event("EMERGENCY_STOP_CLEARED", state)
+    print("PASS: Emergency stop cleared. A new daily approval is still required.")
+    return state
+
+--- lines 477-509 ---
+def stop_session():
+    state = _load_state()
+    MONITOR_STOP.touch()
+    WORKER_STOP.touch()
+    state["approved"] = False
+    state["status"] = "STOP REQUESTED"
+    state["stop_requested_at"] = datetime.now().isoformat(timespec="seconds")
+    _save_state(state)
+
+    print("Stop requested. Waiting for monitor and worker...")
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        running = [
+            name for name in ("monitor", "worker")
+            if _pid_running(state.get(f"{name}_pid"))
+        ]
+        if not running:
+            bridge_stopped = stop_owned_bridge(state)
+            state["status"] = (
+                "STOPPED" if bridge_stopped
+                else "STOPPED - BRIDGE STILL RUNNING"
+            )
+            state["stopped_at"] = datetime.now().isoformat(timespec="seconds")
+            _save_state(state)
+            print("PASS: Monitor and worker exited. Daily approval revoked.")
+            return state
+        time.sleep(1)
+
+    state["status"] = "STOP TIMEOUT"
+    _save_state(state)
+    print("WARNING: Still running:", ", ".join(running))
+    print("Daily approval remains revoked; worker order-submission guard remains active.")
+    return state
+
+==========================================================================================
+FILE: integrations/mt5/client.py
+==========================================================================================
+
+--- lines 1-1 ---
+import csv
+
+--- lines 2-2 ---
+import re
+
+--- lines 3-3 ---
+from pathlib import Path
+
+--- lines 5-5 ---
+import httpx
+
+--- lines 9-9 ---
+BASE_URL = "http://127.0.0.1:8001"
+
+--- lines 12-16 ---
+SIGNAL_LOG = (
+    Path(r"C:\AI-Trading\mt5-bridge")
+    / "strategy"
+    / "signal_monitor_log.csv"
+)
+
+--- lines 18-18 ---
+TIMEOUT = 10.0
+
+--- lines 21-58 ---
+async def _get(endpoint: str) -> dict:
+    """Make a read-only request to the local Hermes bridge."""
+    try:
+        async with httpx.AsyncClient(
+            base_url=BASE_URL,
+            timeout=TIMEOUT,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(endpoint)
+            response.raise_for_status()
+            data = response.json()
+
+        if not isinstance(data, dict):
+            return {"status": "ERROR", "message": "Invalid bridge response."}
+
+        if "error" in data:
+            return {
+                "status": "ERROR",
+                "message": str(data["error"]),
+            }
+
+        return {
+            "status": "SUCCESS",
+            "data": data,
+        }
+
+    except httpx.TimeoutException:
+        return {"status": "ERROR", "message": "MT5 bridge request timed out."}
+    except httpx.HTTPStatusError as exc:
+        return {
+            "status": "ERROR",
+            "message": f"MT5 bridge returned HTTP {exc.response.status_code}.",
+        }
+    except httpx.HTTPError:
+        return {"status": "ERROR", "message": "MT5 bridge is unavailable."}
+    except ValueError:
+        return {"status": "ERROR", "message": "Invalid JSON from MT5 bridge."}
+
+--- lines 61-63 ---
+async def get_account() -> dict:
+    """Read MT5 account information."""
+    return await _get("/account")
+
+--- lines 66-73 ---
+async def get_price(symbol: str = "XAUUSD") -> dict:
+    """Read a market quote for a broker-supported MT5 symbol."""
+    if not isinstance(symbol, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,32}", symbol
+    ):
+        return {"status": "ERROR", "message": "Invalid MT5 symbol."}
+
+    return await _get(f"/price/{symbol}")
+
+--- lines 76-78 ---
+async def get_positions() -> dict:
+    """Read currently open MT5 positions."""
+    return await _get("/positions")
+
+--- lines 81-83 ---
+async def get_history() -> dict:
+    """Read the available 90-day MT5 demo trade history."""
+    return await _get("/history")
+
+--- lines 86-118 ---
+def get_strategy_signal() -> dict:
+    """Read the latest existing Hermes strategy signal."""
+    if not SIGNAL_LOG.is_file():
+        return {
+            "status": "ERROR",
+            "message": "Hermes strategy signal log not found.",
+        }
+
+    try:
+        with SIGNAL_LOG.open(
+            "r",
+            newline="",
+            encoding="utf-8-sig",
+        ) as file:
+            rows = list(csv.DictReader(file))
+
+        if not rows:
+            return {
+                "status": "EMPTY",
+                "message": "Hermes strategy signal log is empty.",
+            }
+
+        return {
+            "status": "SUCCESS",
+            "mode": "READ ONLY",
+            "latest_signal": rows[-1],
+        }
+
+    except (OSError, csv.Error):
+        return {
+            "status": "ERROR",
+            "message": "Could not read Hermes strategy signal log.",
+        }
+
+==========================================================================================
+FILE: dashboard/app.py
+==========================================================================================
+
+--- lines 1-1 ---
+from fastapi import FastAPI, HTTPException
+
+--- lines 2-2 ---
+from fastapi.responses import HTMLResponse, FileResponse
+
+--- lines 3-3 ---
+from pydantic import BaseModel
+
+--- lines 5-5 ---
+from core.settings import load_settings
+
+--- lines 6-6 ---
+from core.agent import NexusAgent
+
+--- lines 7-7 ---
+from agents.manager import list_agents
+
+--- lines 8-8 ---
+from skills.manager import list_skills
+
+--- lines 9-9 ---
+from tools.manager import get_available_tools
+
+--- lines 11-11 ---
+app = FastAPI(title="NEXUS AI Control Centre")
+
+--- lines 14-14 ---
+from pathlib import Path
+
+--- lines 15-15 ---
+_PWA_STATIC = Path(__file__).resolve().parent / "static"
+
+--- lines 18-22 ---
+def pwa_manifest():
+    return FileResponse(
+        _PWA_STATIC / "manifest.webmanifest",
+        media_type="application/manifest+json"
+    )
+
+--- lines 25-30 ---
+def pwa_service_worker():
+    return FileResponse(
+        _PWA_STATIC / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"}
+    )
+
+--- lines 33-37 ---
+def pwa_icon():
+    return FileResponse(
+        _PWA_STATIC / "pwa-icon.svg",
+        media_type="image/svg+xml"
+    )
+
+--- lines 40-41 ---
+class ChatRequest(BaseModel):
+    message: str
+
+--- lines 45-57 ---
+def status():
+    settings = load_settings()
+
+    return {
+        "name": "NEXUS AI",
+        "version": settings["version"],
+        "model_configured": bool(settings["model"]),
+        "memory": settings["memory_enabled"],
+        "agents": len(list_agents()),
+        "skills": len(list_skills()),
+        "tools": len(get_available_tools()),
+        "approval_required": settings["require_approval"]
+    }
+
+--- lines 61-62 ---
+def skills():
+    return {"skills": list_skills()}
+
+--- lines 66-67 ---
+def agents():
+    return {"agents": list_agents()}
+
+--- lines 71-72 ---
+def tools():
+    return {"tools": get_available_tools()}
+
+--- lines 76-88 ---
+async def chat(request: ChatRequest):
+
+    if not request.message.strip():
+        raise HTTPException(400, "Message cannot be empty.")
+
+    try:
+        agent = NexusAgent()
+        answer = await agent.ask(request.message)
+
+        return {"reply": answer}
+
+    except Exception as error:
+        raise HTTPException(500, str(error))
+
+--- lines 89-91 ---
+class SpecialistRequest(BaseModel):
+    skill_name: str
+    message: str
+
+--- lines 95-107 ---
+async def specialist(request: SpecialistRequest):
+    if request.skill_name not in list_skills():
+        raise HTTPException(404, "Unknown skill.")
+
+    try:
+        agent = NexusAgent()
+        reply = await agent.ask_specialist(
+            request.skill_name,
+            request.message
+        )
+        return {"reply": reply}
+    except Exception as error:
+        raise HTTPException(500, str(error))
+
+--- lines 111-433 ---
+def dashboard():
+
+    return HTMLResponse(content="""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NEXUS AI">
+<link rel="apple-touch-icon" href="/pwa-icon.svg">
+
+<title>NEXUS AI Control Centre</title>
+
+<style>
+body {
+    background: #0b1020;
+    color: #e5e7eb;
+    font-family: Arial;
+    margin: 0;
+}
+
+header {
+    background: #111a30;
+    padding: 25px;
+}
+
+h1, h3 {
+    color: #38bdf8;
+}
+
+main {
+    padding: 25px;
+    max-width: 1100px;
+    margin: auto;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit,minmax(220px,1fr));
+    gap: 15px;
+}
+
+.card {
+    background: #151f35;
+    border: 1px solid #263653;
+    border-radius: 10px;
+    padding: 20px;
+}
+
+li {
+    padding: 7px;
+}
+
+#chatbox {
+    height: 300px;
+    overflow-y: auto;
+    background: #080e1c;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+.message {
+    padding: 10px;
+    margin: 8px 0;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.user {
+    background: #164e63;
+}
+
+.assistant {
+    background: #263653;
+}
+
+input {
+    width: 75%;
+    padding: 13px;
+    background: #111a30;
+    color: white;
+    border: 1px solid #38bdf8;
+    border-radius: 6px;
+}
+
+button {
+    padding: 13px 20px;
+    background: #0284c7;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.5;
+}
+
+footer {
+    margin: 40px;
+    text-align: center;
+    color: #64748b;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>NEXUS AI</h1>
+<p>Personal AI Agent — Central Control Centre</p>
+<span>● DASHBOARD ONLINE</span>
+</header>
+
+<main>
+
+<h2>System Overview</h2>
+<div class="grid" id="overview">Loading...</div>
+
+<h2>Specialist Agents</h2>
+<div class="grid" id="agents"></div>
+
+<h2>Skills Engine</h2>
+<div class="card"><ul id="skills"></ul></div>
+
+<h2>Web Research</h2>
+<div class="card">
+    <input id="researchQuery" placeholder="What should NEXUS research?" style="width:75%">
+    <button id="researchButton" type="button">SEARCH</button>
+    <p id="researchStatus">Ready</p>
+    <div id="researchResults"></div>
+</div>
+<h2>Available Tools</h2>
+<div class="card"><ul id="tools"></ul></div>
+
+<h2>NEXUS AI Chat</h2>
+
+<div class="card">
+
+    <div id="chatbox">
+        <div class="message assistant">
+            NEXUS AI: Welcome! How can I help you?
+        </div>
+    </div>
+
+    <form id="chatform">
+        <input
+            id="message"
+            type="text"
+            placeholder="Ask NEXUS AI something..."
+            autocomplete="off"
+            required
+        >
+        <button id="send" type="submit">SEND</button>
+    </form>
+
+    <p id="chatstatus">Ready</p>
+
+</div>
+
+</main>
+
+<footer>
+NEXUS AI | Local Control Centre
+</footer>
+
+<script>
+
+async function loadDashboard() {
+
+    try {
+
+        const s = await (await fetch("/api/status")).json();
+
+        document.getElementById("overview").innerHTML = `
+        <div class="card"><h3>Skills</h3><h2>${s.skills}</h2></div>
+        <div class="card"><h3>Agents</h3><h2>${s.agents}</h2></div>
+        <div class="card"><h3>Tools</h3><h2>${s.tools}</h2></div>
+        <div class="card"><h3>AI Model</h3>${s.model_configured ? "Configured" : "Not configured"}</div>
+        <div class="card"><h3>Memory</h3>${s.memory ? "Enabled" : "Disabled"}</div>
+        <div class="card"><h3>Safety</h3>${s.approval_required ? "Approval required" : "Approval disabled"}</div>`;
+
+        const a = await (await fetch("/api/agents")).json();
+
+        document.getElementById("agents").innerHTML =
+            Object.entries(a.agents).map(([id, agent]) =>
+                `<div class="card">
+                <h3>${agent.name}</h3>
+                <p>${id}</p>
+                <p>${agent.skills.join(", ")}</p>
+                </div>`
+            ).join("");
+
+        const sk = await (await fetch("/api/skills")).json();
+
+        document.getElementById("skills").innerHTML =
+            sk.skills.map(x => `<li>${x}</li>`).join("");
+
+        const t = await (await fetch("/api/tools")).json();
+
+        document.getElementById("tools").innerHTML =
+            t.tools.map(x => `<li>${x}</li>`).join("");
+
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+
+function addMessage(text, role) {
+
+    const box = document.getElementById("chatbox");
+    const message = document.createElement("div");
+
+    message.className = "message " + role;
+    message.textContent = text;
+
+    box.appendChild(message);
+    box.scrollTop = box.scrollHeight;
+}
+
+
+document.getElementById("chatform").addEventListener(
+    "submit",
+    async function(event) {
+
+        event.preventDefault();
+
+        const input = document.getElementById("message");
+        const button = document.getElementById("send");
+        const status = document.getElementById("chatstatus");
+
+        const message = input.value.trim();
+
+        if (!message) return;
+
+        addMessage("YOU: " + message, "user");
+
+        input.value = "";
+        button.disabled = true;
+        status.textContent = "NEXUS AI is thinking...";
+
+        try {
+
+            const response = await fetch("/api/chat", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    message: message
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.detail || "Chat request failed.");
+            }
+
+            addMessage("NEXUS AI: " + data.reply, "assistant");
+
+            status.textContent = "Response received.";
+
+        } catch (error) {
+
+            addMessage("ERROR: " + error.message, "assistant");
+            status.textContent = "Connection or AI error.";
+
+        } finally {
+
+            button.disabled = false;
+            input.focus();
+
+        }
+    }
+);
+
+document.getElementById("researchButton").addEventListener("click", async () => {
+    const query = document.getElementById("researchQuery").value.trim();
+    const status = document.getElementById("researchStatus");
+    const results = document.getElementById("researchResults");
+    if (!query) return;
+    status.textContent = "Researching...";
+    try {
+        const r = await fetch("/api/research/search", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({query: query, count: 5})
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "Search failed");
+        results.innerHTML = data.results.map(x =>
+            `<p><a href="${x.url}" target="_blank" rel="noopener">${x.title}</a><br>${x.snippet || ""}</p>`
+        ).join("");
+        status.textContent = "Found " + data.results.length + " results.";
+    } catch (e) {
+        status.textContent = e.message;
+    }
+});
+loadDashboard();
+
+</script>
+
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/service-worker.js")
+            .catch(error => console.warn(
+                "NEXUS service worker registration failed:", error
+            ));
+    });
+}
+</script>
+</body>
+</html>
+""")
+
+--- lines 436-436 ---
+from dashboard.workspace import router as workspace_router
+
+--- lines 438-438 ---
+from dashboard.research import router as research_router
+
+==========================================================================================
+DISCOVERED TRAINING / WORKER / SUPERVISOR FILES
+==========================================================================================
+integrations\video_clipping\video_autopilot.py
+integrations\xmrig\autopilot.py
+integrations\xmrig\hardware_monitor.py
+integrations\xmrig\monitor.py
+integrations\xmrig\performance_monitor.py
+core\scheduler.py
+
+==========================================================================================
+DEPENDENCIES AND TEST INVENTORY
+==========================================================================================
+
+requirements.txt
+apscheduler
+authlib
+beautifulsoup4
+colorama>=0.4.6
+cryptography
+ddgs
+fastapi
+fastmcp>=4.2.1
+google-api-python-client
+google-auth-oauthlib
+httpx
+keyring
+pydantic
+python-dotenv
+requests
+rich
+tweepy
+uvicorn
+yt-dlp
+tests\test_dashboard.py
+tests\test_release_safety.py

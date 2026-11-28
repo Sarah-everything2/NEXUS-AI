@@ -92,7 +92,7 @@ def collect():
             "cpu_percent": cpu,
             "temperature_c": temperature,
             "estimated_power_watts": watts,
-            "telemetry_complete": temperature is not None and watts is not None
+            "telemetry_complete": (temperature is not None and watts is not None and available_ram is not None and cpu is not None)
         }
 
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,7 @@
 """NEXUS autonomous mining decision and execution coordinator."""
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -26,24 +27,96 @@ def _audit(event):
         f.write(json.dumps({"timestamp": time.time(), **event}) + "\n")
 
 
+def _safety_stop(reason):
+    """Stop an active miner when a mandatory safety policy blocks mining."""
+    try:
+        current = client.status()
+    except Exception as exc:
+        return {
+            "status": "SAFETY_STOP_FAILED",
+            "reason": f"Could not verify miner status: {exc}",
+            "execution": False
+        }
+
+    if not isinstance(current, dict):
+        return {
+            "status": "SAFETY_STOP_FAILED",
+            "reason": "Miner status response is invalid",
+            "execution": False
+        }
+
+    if current.get("status") == "RUNNING":
+        try:
+            stopped = client.stop()
+            return {
+                "status": reason,
+                "execution": False,
+                "stop": stopped
+            }
+        except Exception as exc:
+            return {
+                "status": "SAFETY_STOP_FAILED",
+                "reason": str(exc),
+                "execution": False
+            }
+
+    return {"status": reason, "execution": False}
+
+
 def run_cycle(opportunities, electricity_price_per_kwh, hardware):
     """Evaluate mining. Execution occurs only when policy explicitly permits it."""
     policy = _read(POLICY)
 
     if EMERGENCY.exists():
-        result = {"status": "EMERGENCY_STOP"}
+        result = _safety_stop("EMERGENCY_STOP")
+        _audit(result)
+        return result
+
+    if not isinstance(policy, dict):
+        result = {"status": "BLOCKED", "reason": "Mining policy is invalid",
+                  "execution": False}
         _audit(result)
         return result
 
     if policy.get("mining_enabled") is not True:
-        return {"status": "DISABLED", "execution": False}
+        result = _safety_stop("DISABLED")
+        _audit(result)
+        return result
 
-    decision = evaluate_opportunities(
-        opportunities,
-        electricity_price_per_kwh,
-        hardware,
-        settings=policy.get("profitability_limits", {})
-    )
+    if (isinstance(electricity_price_per_kwh, bool)
+            or not isinstance(electricity_price_per_kwh, (int, float))
+            or not math.isfinite(electricity_price_per_kwh)
+            or electricity_price_per_kwh < 0):
+        result = {"status": "BLOCKED", "reason": "Valid electricity price required"}
+        _audit(result)
+        return result
+
+    limits = policy.get("profitability_limits", {})
+    if not isinstance(limits, dict):
+        result = {"status": "BLOCKED",
+                  "reason": "Profitability limits policy is invalid",
+                  "execution": False}
+        _audit(result)
+        return result
+
+    try:
+        decision = evaluate_opportunities(
+            opportunities,
+            electricity_price_per_kwh,
+            hardware,
+            settings={
+                **limits,
+                "minimum_available_ram_gb": policy.get(
+                    "minimum_available_ram_gb", 1.5
+                ),
+            }
+        )
+    except Exception as exc:
+        result = {"status": "BLOCKED",
+                  "reason": f"Profitability evaluation failed: {exc}",
+                  "execution": False}
+        _audit(result)
+        return result
 
     if decision.get("status") != "RECOMMENDATION_READY":
         if policy.get("stop_when_unprofitable") is True:
@@ -58,23 +131,51 @@ def run_cycle(opportunities, electricity_price_per_kwh, hardware):
                 "execution": False}
 
     if policy.get("autonomous_execution_enabled") is not True:
-        return {"status": "RECOMMENDATION_ONLY", "decision": decision,
-                "execution": False}
+        output = {"status": "RECOMMENDATION_ONLY", "decision": decision,
+                  "execution": False}
+        _audit(output)
+        return output
 
     if EMERGENCY.exists():
-        return {"status": "EMERGENCY_STOP", "execution": False}
+        result = _safety_stop("EMERGENCY_STOP")
+        result["decision"] = decision
+        _audit(result)
+        return result
+
+    recovery = client.recovery_check(
+        profitability_decision=decision
+    )
+
+    if recovery.get("status") != "IDLE":
+        output = {
+            "status": recovery.get("status"),
+            "decision": decision,
+            "recovery": recovery,
+            "execution": recovery.get("status") in ("RUNNING", "RESTARTED")
+        }
+        _audit(output)
+        return output
 
     current = client.status()
     if current["status"] == "RUNNING":
         return {"status": "ALREADY_RUNNING", "decision": decision,
                 "execution": False}
 
-    result = client.start()
-    output = {
-        "status": result.get("status"),
-        "decision": decision,
-        "miner": result
-    }
+    try:
+        result = client.start(profitability_decision=decision)
+        output = {
+            "status": result.get("status"),
+            "decision": decision,
+            "miner": result
+        }
+    except Exception as exc:
+        output = {
+            "status": "START_BLOCKED",
+            "decision": decision,
+            "reason": str(exc),
+            "execution": False
+        }
+
     _audit(output)
     return output
 

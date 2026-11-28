@@ -87,3 +87,7 @@ temp/
 
 # Local upgrade backups
 .nexus_upgrade_backup/
+# Timestamped local backup files
+*.backup_*
+# Runtime process locks
+.external-miners.lock

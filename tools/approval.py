@@ -1,3 +1,4 @@
+import sys
 from core.settings import load_settings
 from tools.github_tools import READ_ONLY_TOOLS
 
@@ -8,6 +9,15 @@ AUTONOMOUS_SAFE_TOOLS = {
     "read_file",
     "web_research",
     "trend_discovery",
+    "xmrig_status",
+    "xmrig_health",
+    "xmrig_logs",
+    "xmrig_recovery_check",
+    "mt5_get_account",
+    "mt5_get_price",
+    "mt5_get_positions",
+    "mt5_get_history",
+    "mt5_get_strategy_signal",
     "video_probe",
     "video_transcribe",
     "video_detect_highlights",
@@ -26,6 +36,18 @@ AUTONOMOUS_SAFE_TOOLS = {
 }
 
 
+
+def _confirm_interactively(prompt, expected):
+    """Never block a hosted service waiting for terminal input."""
+    try:
+        if not sys.stdin or not sys.stdin.isatty():
+            print("BLOCKED: Interactive approval is unavailable.")
+            return False
+        return input(prompt) == expected
+    except (EOFError, OSError):
+        return False
+
+
 def approve_tool_call(tool_name, arguments):
 
     settings = load_settings()
@@ -41,11 +63,10 @@ def approve_tool_call(tool_name, arguments):
             print("BLOCKED: File deletion is disabled.")
             return False
 
-        confirmation = input(
-            "Type DELETE to confirm file deletion: "
+        return _confirm_interactively(
+            "Type DELETE to confirm file deletion: ",
+            "DELETE"
         )
-
-        return confirmation == "DELETE"
 
     # Safe tools can operate autonomously.
     if settings.get("autonomous_mode", False):
@@ -63,11 +84,10 @@ def approve_tool_call(tool_name, arguments):
     # All other operations require explicit approval.
     print("Arguments:", arguments)
 
-    confirmation = input(
-        "Allow this action? Type YES to confirm: "
+    return _confirm_interactively(
+        "Allow this action? Type YES to confirm: ",
+        "YES"
     )
-
-    return confirmation == "YES"
 
 
 if __name__ == "__main__":

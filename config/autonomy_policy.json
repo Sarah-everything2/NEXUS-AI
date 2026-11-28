@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "autonomy": {
+    "routine_learning": true,
+    "experience_collection": true,
+    "automatic_dataset_curation": true,
+    "automatic_dspy_optimization": true,
+    "automatic_candidate_evaluation": true,
+    "automatic_retry": true,
+    "maximum_retries": 2,
+    "autonomous_task_execution": true,
+    "maximum_concurrent_cycles": 1
+  },
+  "learning": {
+    "minimum_evaluation_score": 0.75,
+    "maximum_regression": 0.02,
+    "maximum_optimization_examples": 1000,
+    "maximum_bootstrapped_demos": 4
+  },
+  "safety": {
+    "redact_secrets": true,
+    "exclude_untrusted_data": true,
+    "automatic_dangerous_tool_execution": false,
+    "automatic_financial_actions": false,
+    "automatic_production_model_replacement": false,
+    "preserve_emergency_stop": true,
+    "audit_all_changes": true,
+    "require_existing_tool_permissions": true,
+    "require_emergency_stop_check": true
+  }
+}

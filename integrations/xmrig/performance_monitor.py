@@ -1,13 +1,14 @@
 """Read-only XMRig performance telemetry."""
 
 import json
+import os
 import time
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "config" / "xmrig.performance.json"
-API = "http://127.0.0.1:18088/2/summary"
+API = os.environ.get("NEXUS_XMRIG_API_URL", "http://127.0.0.1:18088/2/summary")
 
 
 def collect():

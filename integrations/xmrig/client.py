@@ -1,11 +1,12 @@
 import json
+import math
 import os
 import subprocess
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MINER = Path(r"C:\Mininglab\miners\xmrig-6.26.0-windows-x64\xmrig-6.26.0")
+MINER = Path(os.environ.get("NEXUS_XMRIG_DIR", str(ROOT / "miners" / "xmrig"))).expanduser().resolve()
 EXE = MINER / "xmrig.exe"
 BASE_CONFIG = MINER / "config.json"
 RUNTIME_CONFIG = ROOT / "config" / "xmrig.runtime.json"
@@ -28,39 +29,104 @@ def _save_json(path, data):
     os.replace(temp, path)
 
 
-def _process_executable(pid):
+
+def _inspect_process(pid):
+    """Return RUNNING, EXITED, or UNKNOWN without conflating inspection errors."""
+    if isinstance(pid, bool):
+        return "UNKNOWN", None
+
     try:
         pid = int(pid)
-        if pid <= 0:
-            return None
-        command = (
-            f"$p = Get-CimInstance Win32_Process "
-            f"-Filter 'ProcessId={pid}'; "
-            "if ($p) { $p.ExecutablePath }"
-        )
+    except (TypeError, ValueError, OverflowError):
+        return "UNKNOWN", None
+
+    if pid <= 0:
+        return "UNKNOWN", None
+
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' "
+        "-ErrorAction Stop; "
+        "if ($null -eq $p) { '__NEXUS_PROCESS_EXITED__' } "
+        "elseif ([string]::IsNullOrWhiteSpace($p.ExecutablePath)) "
+        "{ '__NEXUS_PROCESS_UNKNOWN__' } "
+        "else { $p.ExecutablePath }"
+    )
+
+    try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
-            capture_output=True, text=True, timeout=10
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
-        return result.stdout.strip() or None
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        return None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return "UNKNOWN", None
+
+    if result.returncode != 0:
+        return "UNKNOWN", None
+
+    output = (result.stdout or "").strip()
+    if output == "__NEXUS_PROCESS_EXITED__":
+        return "EXITED", None
+    if not output or output == "__NEXUS_PROCESS_UNKNOWN__":
+        return "UNKNOWN", None
+
+    return "RUNNING", output
+
+
+def _valid_saved_pid(value):
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int)
+        and value > 0
+    )
+
+
+def _same_executable(actual):
+    if not isinstance(actual, str) or not actual.strip():
+        return False
+    return os.path.normcase(os.path.normpath(actual)) == os.path.normcase(
+        os.path.normpath(str(EXE))
+    )
 
 
 def status():
-    state = _read_json(STATE)
-    pid = state.get("pid")
-    actual = _process_executable(pid) if pid else None
-    running = bool(
-        actual and os.path.normcase(actual) == os.path.normcase(str(EXE))
-    )
+    if not STATE.exists():
+        return {
+            "status": "STOPPED",
+            "pid": None,
+            "executable": str(EXE),
+            "runtime_configured": RUNTIME_CONFIG.is_file(),
+            "log": str(LOG),
+        }
+
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        state = None
+
+    if not isinstance(state, dict) or not _valid_saved_pid(state.get("pid")):
+        process_status, pid = "UNKNOWN", None
+    else:
+        pid = state["pid"]
+        process_status, actual = _inspect_process(pid)
+
+        if process_status == "RUNNING" and not _same_executable(actual):
+            process_status = "UNKNOWN"
+        elif process_status == "EXITED":
+            process_status = "STOPPED"
+
+        if process_status != "RUNNING":
+            pid = None
 
     return {
-        "status": "RUNNING" if running else "STOPPED",
-        "pid": int(pid) if running else None,
+        "status": process_status,
+        "pid": pid,
         "executable": str(EXE),
         "runtime_configured": RUNTIME_CONFIG.is_file(),
-        "log": str(LOG)
+        "log": str(LOG),
     }
 
 
@@ -165,10 +231,10 @@ def configure_pools(coin, algorithm, pools, threads=25):
     }
 
 
-def configure_pool(url, wallet, password="x", tls=False):
+def configure_pool(url, wallet, algorithm, password="x", tls=False):
     return configure_pools(
         coin="custom",
-        algorithm="",
+        algorithm=algorithm,
         pools=[{
             "url": url,
             "wallet": wallet,
@@ -192,30 +258,133 @@ def list_coin_profiles():
     }
 
 
-def start():
+
+def _validate_profitability_decision(decision):
+    """Require a fresh, finite, positive profitability approval."""
+    if not isinstance(decision, dict):
+        raise RuntimeError("Mining blocked: fresh profitability approval required.")
+
+    if decision.get("status") != "RECOMMENDATION_READY":
+        raise RuntimeError("Mining blocked: no profitable recommendation.")
+
+    selected = decision.get("selected")
+    if not isinstance(selected, dict):
+        raise RuntimeError("Mining blocked: selected coin is missing.")
+
+    coin = selected.get("coin")
+    algorithm = selected.get("algorithm")
+    if not isinstance(coin, str) or not coin.strip():
+        raise RuntimeError("Mining blocked: approved coin is invalid.")
+    if not isinstance(algorithm, str) or not algorithm.strip():
+        raise RuntimeError("Mining blocked: approved algorithm is invalid.")
+
+    raw_time = decision.get("evaluated_at")
+    raw_profit = selected.get(
+        "estimated_net_profit_per_day",
+        selected.get("net_profit_per_day")
+    )
+    if isinstance(raw_time, bool) or isinstance(raw_profit, bool):
+        raise RuntimeError("Mining blocked: invalid profitability decision.")
+
+    try:
+        evaluated_at = float(raw_time)
+        net_profit = float(raw_profit)
+    except (TypeError, ValueError, OverflowError):
+        raise RuntimeError("Mining blocked: invalid profitability decision.")
+
+    if not math.isfinite(evaluated_at) or not math.isfinite(net_profit):
+        raise RuntimeError("Mining blocked: non-finite profitability data.")
+
+    age = time.time() - evaluated_at
+    if age < 0 or age > 120:
+        raise RuntimeError("Mining blocked: profitability decision is stale.")
+
+    if net_profit <= 0:
+        raise RuntimeError("Mining blocked: net profitability is not positive.")
+
+    return selected
+
+
+def start(profitability_decision=None):
+    from integrations.mining.process_lock import process_lock
+    with process_lock(ROOT / "config" / "mining" / ".external-miners.lock"):
+        return _start_locked(profitability_decision)
+
+
+def _start_locked(profitability_decision=None):
+    policy_path = ROOT / "config" / "xmrig.policy.json"
+    emergency_stop = ROOT / "config" / "MINING_EMERGENCY_STOP"
+    policy = _read_json(policy_path, {})
+
+    if emergency_stop.exists():
+        raise RuntimeError("Mining blocked: emergency stop is active.")
+
+    if policy.get("mining_enabled") is not True:
+        raise RuntimeError("Mining blocked: mining is not enabled.")
+
+    if policy.get("autonomous_execution_enabled") is not True:
+        raise RuntimeError("Mining blocked: autonomous execution is not enabled.")
+
+    if policy.get("stop_when_unprofitable") is not True:
+        raise RuntimeError("Mining blocked: profitability protection must remain enabled.")
+
+    selected = _validate_profitability_decision(profitability_decision)
+
     memory = health()
     available_ram = memory.get("available_ram_gb")
+    minimum_ram = policy.get("minimum_available_ram_gb", 1.5)
 
-    if not isinstance(available_ram, (int, float)) or available_ram < 2.5:
+    if (isinstance(minimum_ram, bool)
+            or not isinstance(minimum_ram, (int, float))
+            or minimum_ram <= 0):
+        raise RuntimeError("Mining blocked: invalid minimum RAM policy.")
+
+    if (not isinstance(available_ram, (int, float))
+            or available_ram < float(minimum_ram)):
         raise RuntimeError(
             f"Mining blocked: {available_ram} GB RAM available; "
-            "at least 2.5 GB is required. Free memory or upgrade RAM first."
+            f"at least {minimum_ram} GB is required."
         )
+
     if not EXE.is_file():
-        raise FileNotFoundError("XMRig executable not found.")
+        raise FileNotFoundError(f"XMRig executable not found: {EXE}")
+
     if not RUNTIME_CONFIG.is_file():
-        raise RuntimeError("Configure your own mining pool and wallet first.")
+        raise RuntimeError("Configure a mining pool, wallet and algorithm first.")
 
     config = _read_json(RUNTIME_CONFIG)
     pools = config.get("pools", [])
-    if not pools or not pools[0].get("user"):
-        raise RuntimeError("Mining pool or wallet is missing.")
-    if "donate.v2.xmrig.com" in pools[0].get("url", "").lower():
+
+    if not isinstance(pools, list) or not pools:
+        raise RuntimeError("Mining pool configuration is missing.")
+
+    pool = pools[0]
+    if not isinstance(pool, dict) or not pool.get("user"):
+        raise RuntimeError("Mining pool wallet is missing.")
+
+    if "donate.v2.xmrig.com" in str(pool.get("url", "")).lower():
         raise RuntimeError("Donation endpoint blocked.")
+
+    if str(pool.get("coin", "")).lower() != str(selected.get("coin", "")).lower():
+        raise RuntimeError("Mining blocked: configured pool coin does not match the approved coin.")
+
+    if str(pool.get("algo", "")).lower() != str(selected.get("algorithm", "")).lower():
+        raise RuntimeError("Mining blocked: configured pool algorithm does not match the approved algorithm.")
 
     current = status()
     if current["status"] == "RUNNING":
         return {"status": "ALREADY_RUNNING", "pid": current["pid"]}
+    if current["status"] != "STOPPED":
+        raise RuntimeError(
+            "Mining blocked: existing XMRig process ownership is uncertain."
+        )
+
+    from integrations.mining.process_lock import ensure_no_other_miner_running
+    ensure_no_other_miner_running("xmrig")
+
+    # Recheck the emergency stop immediately before process creation.
+    if emergency_stop.exists():
+        raise RuntimeError("Mining blocked: emergency stop became active.")
 
     LOG.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(LOG, "a", encoding="utf-8")
@@ -227,7 +396,7 @@ def start():
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
     finally:
         log_handle.close()
@@ -240,47 +409,84 @@ def start():
     return {"status": "STARTED", "pid": process.pid}
 
 
-def stop():
-    state = _read_json(STATE)
-    pid = state.get("pid")
 
-    if not pid:
+
+def stop():
+    from integrations.mining.process_lock import process_lock
+    with process_lock(ROOT / "config" / "mining" / ".external-miners.lock"):
+        return _stop_locked()
+
+
+def _stop_locked():
+    if not STATE.exists():
         return {"status": "NOT_RUNNING"}
 
     try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return {"status": "STOP_FAILED", "reason": "Invalid saved PID."}
-
-    actual = _process_executable(pid)
-
-    if not actual:
-        STATE.unlink(missing_ok=True)
-        return {"status": "NOT_RUNNING"}
-
-    if os.path.normcase(actual) != os.path.normcase(str(EXE)):
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
         return {
-            "status": "STOP_FAILED",
-            "reason": "PID does not belong to the configured XMRig executable. State preserved."
+            "status": "STOP_BLOCKED",
+            "reason": "Saved process state is unreadable; state preserved.",
         }
 
-    result = subprocess.run(
-        ["taskkill", "/PID", str(pid), "/T", "/F"],
-        capture_output=True, text=True, timeout=15
-    )
+    if not isinstance(state, dict) or not _valid_saved_pid(state.get("pid")):
+        return {
+            "status": "STOP_BLOCKED",
+            "reason": "Saved PID is invalid; state preserved.",
+        }
+
+    pid = state["pid"]
+    ownership, actual = _inspect_process(pid)
+
+    if ownership == "EXITED":
+        STATE.unlink(missing_ok=True)
+        return {"status": "STOPPED", "pid": pid}
+
+    if ownership != "RUNNING":
+        return {
+            "status": "STOP_BLOCKED",
+            "reason": "Process state is unknown; saved state preserved.",
+            "pid": pid,
+        }
+
+    if not _same_executable(actual):
+        return {
+            "status": "STOP_BLOCKED",
+            "reason": "PID does not belong to configured XMRig; state preserved.",
+            "pid": pid,
+        }
+
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "STOP_FAILED",
+            "reason": str(exc),
+            "pid": pid,
+        }
 
     time.sleep(1)
-    remaining = _process_executable(pid)
+    final_status, final_executable = _inspect_process(pid)
 
-    if remaining and os.path.normcase(remaining) == os.path.normcase(str(EXE)):
-        return {
-            "status": "STOP_FAILED",
-            "reason": result.stderr.strip() or "XMRig process is still running.",
-            "pid": pid
-        }
+    if final_status == "EXITED":
+        STATE.unlink(missing_ok=True)
+        return {"status": "STOPPED", "pid": pid}
 
-    STATE.unlink(missing_ok=True)
-    return {"status": "STOPPED", "pid": pid}
+    reason = (
+        "XMRig process remains running."
+        if final_status == "RUNNING" and _same_executable(final_executable)
+        else "Process exit could not be confirmed; saved state preserved."
+    )
+    if result.stderr.strip():
+        reason += " " + result.stderr.strip()
+
+    return {"status": "STOP_FAILED", "reason": reason, "pid": pid}
 
 
 def logs(lines=30):
@@ -292,18 +498,50 @@ def logs(lines=30):
 
 
 
-def recovery_check():
-    state = _read_json(STATE)
-    pid = state.get("pid")
+def recovery_check(profitability_decision=None):
+    from integrations.mining.process_lock import process_lock
+    with process_lock(ROOT / "config" / "mining" / ".external-miners.lock"):
+        return _recovery_check_locked(profitability_decision)
 
-    if not pid:
+
+def _recovery_check_locked(profitability_decision=None):
+    if not STATE.exists():
         return {"status": "IDLE", "crash_detected": False}
 
-    actual = _process_executable(pid)
-    if actual and os.path.normcase(actual) == os.path.normcase(str(EXE)):
-        return {"status": "RUNNING", "crash_detected": False, "pid": int(pid)}
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {
+            "status": "RESTART_BLOCKED",
+            "reason": "Saved XMRig process state is unreadable; recovery blocked.",
+        }
 
-    STATE.unlink(missing_ok=True)
+    if not isinstance(state, dict) or not _valid_saved_pid(state.get("pid")):
+        return {
+            "status": "RESTART_BLOCKED",
+            "reason": "Saved XMRig PID is invalid; recovery blocked.",
+        }
+
+    pid = state["pid"]
+    ownership, actual = _inspect_process(pid)
+
+    if ownership == "RUNNING":
+        if _same_executable(actual):
+            return {
+                "status": "RUNNING",
+                "crash_detected": False,
+                "pid": pid,
+            }
+        return {
+            "status": "RESTART_BLOCKED",
+            "reason": "PID belongs to another executable; recovery blocked.",
+        }
+
+    if ownership != "EXITED":
+        return {
+            "status": "RESTART_BLOCKED",
+            "reason": "Previous XMRig process state is unknown; recovery blocked.",
+        }
 
     policy_path = ROOT / "config" / "xmrig.policy.json"
     emergency_stop = ROOT / "config" / "MINING_EMERGENCY_STOP"
@@ -314,10 +552,27 @@ def recovery_check():
     now = time.time()
 
     history = _read_json(ROOT / "config" / "xmrig.recovery.json", {})
-    attempts = [
-        x for x in history.get("attempts", [])
-        if now - float(x.get("timestamp", 0)) < 3600
-    ]
+    if not isinstance(history, dict):
+        return {"status": "RESTART_BLOCKED", "reason": "Invalid recovery history"}
+
+    raw_attempts = history.get("attempts", [])
+    if not isinstance(raw_attempts, list):
+        return {"status": "RESTART_BLOCKED", "reason": "Invalid recovery attempt list"}
+
+    attempts = []
+    for item in raw_attempts:
+        if not isinstance(item, dict):
+            return {"status": "RESTART_BLOCKED", "reason": "Malformed recovery history entry"}
+        try:
+            timestamp = float(item["timestamp"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {"status": "RESTART_BLOCKED", "reason": "Invalid recovery timestamp"}
+
+        if not math.isfinite(timestamp) or timestamp > now + 60:
+            return {"status": "RESTART_BLOCKED", "reason": "Invalid recovery timestamp"}
+
+        if 0 <= now - timestamp < 3600:
+            attempts.append(item)
 
     event = {
         "event": "XMRIG_EXITED_UNEXPECTEDLY",
@@ -342,13 +597,46 @@ def recovery_check():
         return {"status": "CRASH_DETECTED", "restart_authorized": False,
                 "reason": "Autonomous restart is not enabled"}
 
-    if len(attempts) >= int(policy.get("maximum_restarts_per_hour", 3)):
+    if policy.get("autonomous_execution_enabled") is not True:
+        return {"status": "RESTART_BLOCKED",
+                "reason": "Autonomous execution is not enabled"}
+
+    if policy.get("stop_when_unprofitable") is not True:
+        return {"status": "RESTART_BLOCKED",
+                "reason": "Profitability protection must remain enabled"}
+
+    try:
+        _validate_profitability_decision(profitability_decision)
+    except Exception as exc:
+        return {
+            "status": "RESTART_BLOCKED",
+            "restart_authorized": False,
+            "reason": str(exc)
+        }
+
+    maximum = policy.get("maximum_restarts_per_hour", 3)
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        return {"status": "RESTART_BLOCKED", "reason": "Invalid hourly restart limit"}
+
+    if len(attempts) >= maximum:
         return {"status": "RESTART_BLOCKED", "reason": "Hourly restart limit reached"}
 
-    if not isinstance(available, (int, float)) or available < float(
-        policy.get("minimum_available_ram_gb", 2.5)
+    minimum_ram = policy.get("minimum_available_ram_gb", 1.5)
+    if (
+        isinstance(minimum_ram, bool)
+        or not isinstance(minimum_ram, (int, float))
+        or not math.isfinite(minimum_ram)
+        or minimum_ram <= 0
     ):
-        return {"status": "RESTART_BLOCKED", "reason": "Insufficient available RAM"}
+        return {"status": "RESTART_BLOCKED", "reason": "Invalid minimum RAM policy"}
+
+    if (
+        isinstance(available, bool)
+        or not isinstance(available, (int, float))
+        or not math.isfinite(available)
+        or available < minimum_ram
+    ):
+        return {"status": "RESTART_BLOCKED", "reason": "Insufficient or invalid available RAM"}
 
     if not EXE.is_file() or not RUNTIME_CONFIG.is_file():
         return {"status": "RESTART_BLOCKED", "reason": "Miner or runtime configuration missing"}
@@ -357,7 +645,7 @@ def recovery_check():
     _save_json(ROOT / "config" / "xmrig.recovery.json", {"attempts": attempts})
 
     try:
-        result = start()
+        result = start(profitability_decision=profitability_decision)
         return {
             "status": "RESTARTED" if result.get("status") == "STARTED" else result.get("status"),
             "crash_detected": True,

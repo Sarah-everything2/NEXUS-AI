@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "provider": "ollama",
+  "model": null,
+  "optimization_enabled": true,
+  "automatic_promotion": false,
+  "timeout": 180,
+  "max_retries": 1,
+  "evaluation_threshold": 0.85,
+  "safety": {
+    "preserve_existing_ollama_client": true,
+    "preserve_existing_tool_approval": true,
+    "no_automatic_tool_execution": true,
+    "no_automatic_model_replacement": true,
+    "require_human_approval_for_promotion": true,
+    "exclude_secrets_from_learning": true
+  }
+}
